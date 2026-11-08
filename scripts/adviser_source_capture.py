@@ -168,6 +168,7 @@ def parse_betclan(html, url, listing_evidence=None):
     # may override it ONLY when both pages corroborate URL, oriented teams,
     # competition and visible date/time, and the listing carries explicit UTC.
     detail_kickoff = kickoff
+    listing_kickoff = None
     clock_basis = "DETAIL_STRUCTURED_EVENT" if kickoff else "CLOCK_UNVERIFIED"
     clock_disagreement_minutes = None
     if isinstance(listing_evidence, dict) and event is not None:
@@ -181,6 +182,7 @@ def parse_betclan(html, url, listing_evidence=None):
             and (not listing_competition or listing_competition == detail_competition)):
             at = datetime.fromisoformat(listing_stamp.replace("Z", "+00:00"))
             if at.strftime("%Y-%m-%d %H:%M") == f"{dt.group(1)} {dt.group(2)}":
+                listing_kickoff = listing_stamp
                 if detail_kickoff:
                     detail_at = datetime.fromisoformat(detail_kickoff)
                     clock_disagreement_minutes = int(
@@ -208,6 +210,7 @@ def parse_betclan(html, url, listing_evidence=None):
         "raw_content_hash": hashlib.sha256(html.encode()).hexdigest(),
         "parser_version": "betclan-v3-listing-utc-crosscheck",
         "source_detail_kickoff": detail_kickoff,
+        "source_listing_kickoff": listing_kickoff,
         "source_clock_basis": clock_basis,
         "source_clock_disagreement_minutes": clock_disagreement_minutes,
         "hda": valid_triplet({k.lower(): v for k, v in probs.items()}),
