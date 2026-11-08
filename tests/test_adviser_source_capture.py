@@ -134,7 +134,7 @@ class BoundedSourceEvidenceTest(unittest.TestCase):
             if "/en/betting-tips/football/" in url:
                 return listing
             import re
-            m=re.search(r"/en/betting-tips/testhome-testaway-(\\d+)/",url)
+            m=re.search(r"/en/betting-tips/testhome-testaway-(\d+)/",url)
             if m: return detail_html(int(m.group(1))-600000)
             return '<html>No verified event JSON-LD</html>'
         with tempfile.TemporaryDirectory() as tmp, patch(
