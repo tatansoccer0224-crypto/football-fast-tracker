@@ -472,6 +472,10 @@ def collect(limit=100, pause=0.4, session=None, source=None, evidence_dir=None, 
             time.sleep(pause)
         if source == "BETCLAN":
             diag["listing_utc_proofs"] = sum(p is not None for p in listing_clocks.values())
+            diag["clock_proof_status"] = ("PROOFS_UNAVAILABLE"
+                if diag["candidate_urls"] >= 20 and diag["listing_utc_proofs"] == 0
+                else "PROOFS_PRESENT" if diag["listing_utc_proofs"] > 0
+                else "NO_LISTING_TARGETS")
             diag["clock_conflicts_resolved"] = sum(
                 r.get("source") == "BETCLAN" and
                 r.get("source_clock_basis") == "LISTING_UTC_CONFIRMED_DETAIL_CLOCK_CONFLICT"
@@ -539,5 +543,9 @@ if __name__ == "__main__":
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps({"providers": report["providers"], "total": len(report["records"]) }))
+    if report["providers"].get("BETCLAN", {}).get("clock_proof_status") == "PROOFS_UNAVAILABLE":
+        print("::warning::BETCLAN_LISTING_UTC_PROOFS_MISSING: "
+              "source HTML contained 20+ links but zero corroborated UTC events; "
+              "do not assume listing/detail clocks are verified.")
     if not report["records"]:
         raise SystemExit("capture failed: no source-backed adviser records; no ingestion")
