@@ -456,7 +456,7 @@ def replay_saved_evidence(report, evidence_dir):
     return {**report, 'records': records}
 
 
-# Related SportsEvent page fetches are limited to 8 daily. Sort *after*
+# Related SportsEvent page fetches are limited to 16 daily. Sort *after*
 # collecting all allowed tip details, so alphabetical URL order cannot spend
 # the evidence budget on arbitrary early URLs. Priority only controls WHICH
 # source proof to read; it never certifies identity or guesses timezones.
@@ -483,7 +483,7 @@ def collect(limit=100, pause=0.4, session=None, source=None, evidence_dir=None, 
         raise ValueError("unknown_source")
     if not 1 <= limit <= 120:
         raise ValueError("invalid_source_limit")
-    if not 0 <= related_evidence_limit <= 8 or (related_evidence_limit and evidence_dir is None):
+    if not 0 <= related_evidence_limit <= 16 or (related_evidence_limit and evidence_dir is None):
         raise ValueError("invalid_related_evidence_limit")
     selected_source = source
     related_attempts = 0
@@ -602,7 +602,7 @@ if __name__ == "__main__":
     parser.add_argument("--limit", type=int, default=100)
     parser.add_argument("--source", choices=tuple(SOURCES))
     parser.add_argument("--evidence-dir", type=Path)
-    parser.add_argument("--related-evidence-limit", type=int, default=0, choices=range(9))
+    parser.add_argument("--related-evidence-limit", type=int, default=0, choices=range(17))
     parser.add_argument("--replay-input", type=Path)
     args = parser.parse_args()
     if not 1 <= args.limit <= 120:
