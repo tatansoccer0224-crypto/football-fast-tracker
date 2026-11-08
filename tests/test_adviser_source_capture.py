@@ -253,6 +253,24 @@ class BetClanUTCListingCrosscheckTest(unittest.TestCase):
         self.assertEqual(out["records"][0]["source_kickoff"],"2026-11-08T17:00:00+00:00")
 
 
+    def test_missing_listing_utc_evidence_is_flagged_and_no_time_invented(self):
+        # Regress the actual previous silent failure: many real-looking
+        # listing URLs, but zero parseable independent listing UTC events.
+        listing = "".join(
+            f'<a href="/predictionsdetails/football/{9000+n}/match-{n}/">tip</a>'
+            for n in range(25))
+        detail = '<h1>Home vs Away Prediction</h1><p>Date 2026-11-08 17:00</p>'
+        def fake_fetch(session,url):
+            return detail if "/predictionsdetails/football/" in url else listing
+        with patch("scripts.adviser_source_capture.fetch", side_effect=fake_fetch):
+            out = collect(source="BETCLAN", limit=1, pause=0)
+        self.assertEqual(out["providers"]["BETCLAN"]["candidate_urls"],25)
+        self.assertEqual(out["providers"]["BETCLAN"]["listing_utc_proofs"],0)
+        self.assertEqual(out["providers"]["BETCLAN"]["clock_proof_status"],
+                         "PROOFS_UNAVAILABLE")
+        self.assertIsNone(out["records"][0]["source_kickoff"])
+        self.assertFalse(out["records"][0]["kickoff_timezone_verified"])
+
     def test_real_utc_conflict_is_resolved_from_exact_listing_sportsevent(self):
         proof = betclan_utc_listing_evidence(self.listing())[self.URL]
         row = parse_betclan(self.detail(), self.URL, proof)
