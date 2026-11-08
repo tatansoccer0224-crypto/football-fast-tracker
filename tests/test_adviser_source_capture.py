@@ -235,7 +235,7 @@ class BetClanUTCListingCrosscheckTest(unittest.TestCase):
 
     def test_source_does_not_gain_utc_proof_from_wrong_team_or_time(self):
         for html in [
-            self.listing(home="Other Team"),
+            self.listing().replace('"name": "Inter"', '"name": "Other Team"'),
             self.listing(clock="16:00"),
             self.listing(start="2026-11-08T17:00:00+01:00"),
             self.listing(start="2026-11-08T16:00:00Z"),
