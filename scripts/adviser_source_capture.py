@@ -55,7 +55,70 @@ def valid_triplet(p):
     return p if abs(sum(p[x] for x in ("home", "draw", "away")) - 1) <= 0.025 else None
 
 
-def parse_betclan(html, url):
+
+def betclan_utc_listing_evidence(html):
+    """Capture independent, exact-url BetClan listing SportsEvent UTC evidence.
+
+    BetClan can emit '17:00Z' in its listing but '17:00+01:00' in its
+    detail while both human-facing clocks display 17:00. Never assume a
+    universal timezone shift: require the listing's explicit UTC, same
+    oriented team names, and matching displayed listing time. Contradictory
+    duplicate source events are excluded, not selected arbitrarily.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    found = {}
+    for cell in soup.select("div.bclisttip"):
+        anchor = cell.find("a", href=True)
+        if anchor is None:
+            continue
+        url = urljoin(SOURCES["BETCLAN"][0], anchor["href"])
+        parsed = urlparse(url)
+        if (parsed.scheme != "https" or parsed.hostname != HOSTS["BETCLAN"]
+            or parsed.query or parsed.fragment
+            or not re.fullmatch(r"/predictionsdetails/football/\d+/[^/?#]+/", parsed.path)):
+            continue
+        clock_node = cell.select_one(".bctime .convert_date")
+        home_node = cell.select_one(".bchome")
+        away_node = cell.select_one(".bcaway")
+        if not clock_node or not home_node or not away_node:
+            continue
+        clock = clock_node.get_text(" ", strip=True)
+        oriented = (home_node.get_text(" ", strip=True), away_node.get_text(" ", strip=True))
+        for script in cell.find_all("script", type="application/ld+json"):
+            try:
+                data = json.loads(script.string or "")
+            except (ValueError, TypeError):
+                continue
+            for event in data if isinstance(data, list) else [data]:
+                if not isinstance(event, dict) or event.get("@type") != "SportsEvent":
+                    continue
+                if (event.get("url") != url
+                    or tuple(str(event.get(k, {}).get("name", "")).strip()
+                             for k in ("homeTeam", "awayTeam")) != oriented):
+                    continue
+                start = event.get("startDate")
+                if not isinstance(start, str) or not re.fullmatch(
+                    r"20\d{2}-[01]\d-[0-3]\dT(?:[01]\d|2[0-3]):[0-5]\d:00Z", start
+                ):
+                    continue
+                try:
+                    start_utc = datetime.fromisoformat(start.replace("Z", "+00:00"))
+                except ValueError:
+                    continue
+                if start_utc.strftime("%H:%M") != clock:
+                    continue
+                loc = event.get("location", {})
+                league = loc.get("name") if isinstance(loc, dict) else None
+                proof = {"startDate": start, "home": oriented[0], "away": oriented[1],
+                         "competition": league}
+                if url in found and found[url] != proof:
+                    found[url] = None
+                elif url not in found:
+                    found[url] = proof
+    return {url: evidence for url, evidence in found.items() if evidence is not None}
+
+
+def parse_betclan(html, url, listing_evidence=None):
     soup = BeautifulSoup(html, "html.parser")
     h1 = soup.find("h1")
     if not h1:
@@ -101,6 +164,37 @@ def parse_betclan(html, url):
                 kickoff = at.isoformat()
         except ValueError:
             pass
+    # Preserve the original detail-zone stamp for an audit. A listing stamp
+    # may override it ONLY when both pages corroborate URL, oriented teams,
+    # competition and visible date/time, and the listing carries explicit UTC.
+    detail_kickoff = kickoff
+    clock_basis = "DETAIL_STRUCTURED_EVENT" if kickoff else "CLOCK_UNVERIFIED"
+    clock_disagreement_minutes = None
+    if isinstance(listing_evidence, dict) and event is not None:
+        listing_stamp = listing_evidence.get("startDate")
+        listing_competition = listing_evidence.get("competition")
+        detail_competition = (event.get("organizer") or {}).get("name")
+        if (isinstance(listing_stamp, str)
+            and re.fullmatch(r"20\d{2}-[01]\d-[0-3]\dT(?:[01]\d|2[0-3]):[0-5]\d:00Z", listing_stamp)
+            and listing_evidence.get("home") == match.group(1).strip()
+            and listing_evidence.get("away") == match.group(2).strip()
+            and (not listing_competition or listing_competition == detail_competition)):
+            at = datetime.fromisoformat(listing_stamp.replace("Z", "+00:00"))
+            if at.strftime("%Y-%m-%d %H:%M") == f"{dt.group(1)} {dt.group(2)}":
+                if detail_kickoff:
+                    detail_at = datetime.fromisoformat(detail_kickoff)
+                    clock_disagreement_minutes = int(
+                        (at - detail_at).total_seconds() / 60)
+                # Only a documented one-hour discrepancy or a fully agreeing
+                # clock may be reconciled. Any other conflict remains UNKNOWN.
+                if clock_disagreement_minutes in (None, 0, -60, 60):
+                    kickoff = at.isoformat()
+                    clock_basis = ("LISTING_UTC_CONFIRMED_DETAIL_CLOCK_CONFLICT"
+                                   if clock_disagreement_minutes in (-60, 60)
+                                   else "LISTING_UTC_CORROBORATED")
+                else:
+                    kickoff = None
+                    clock_basis = "LISTING_DETAIL_CLOCK_CONFLICT_UNRESOLVED"
     return {
         "source": "BETCLAN", "source_url": url,
         "source_event_id": re.search(r"/football/(\d+)/", url).group(1),
@@ -112,7 +206,10 @@ def parse_betclan(html, url):
         "source_competition": event.get("organizer", {}).get("name") if event else None,
         "source_event_status": event.get("eventStatus") if event else None,
         "raw_content_hash": hashlib.sha256(html.encode()).hexdigest(),
-        "parser_version": "betclan-v2-structured-event",
+        "parser_version": "betclan-v3-listing-utc-crosscheck",
+        "source_detail_kickoff": detail_kickoff,
+        "source_clock_basis": clock_basis,
+        "source_clock_disagreement_minutes": clock_disagreement_minutes,
         "hda": valid_triplet({k.lower(): v for k, v in probs.items()}),
         "over25": percentage(re.search(r"\bOver\s*" + PERCENT, goal, re.I).group(1))
         if re.search(r"\bOver\s*" + PERCENT, goal, re.I) else None,
@@ -310,9 +407,17 @@ def collect(limit=100, pause=0.4, session=None, source=None, evidence_dir=None, 
         diag = {"listings_ok": 0, "candidate_urls": 0, "parsed": 0, "failed": 0,
                 "status": "UNAVAILABLE"}
         urls = set()
+        listing_clocks = {}
         for url in listings:
             try:
-                urls.update(candidate_urls(fetch(session, url), source))
+                listing_html = fetch(session, url)
+                urls.update(candidate_urls(listing_html, source))
+                if source == "BETCLAN":
+                    for match_url, proof in betclan_utc_listing_evidence(listing_html).items():
+                        if match_url in listing_clocks and listing_clocks[match_url] != proof:
+                            listing_clocks[match_url] = None
+                        elif match_url not in listing_clocks:
+                            listing_clocks[match_url] = proof
                 diag["listings_ok"] += 1
             except (requests.RequestException, RuntimeError) as exc:
                 diag["last_error"] = type(exc).__name__
@@ -326,8 +431,8 @@ def collect(limit=100, pause=0.4, session=None, source=None, evidence_dir=None, 
                     evidence_path = Path(evidence_dir) / source.lower() / (evidence_hash + ".html")
                     evidence_path.parent.mkdir(parents=True, exist_ok=True)
                     evidence_path.write_text(html, encoding="utf-8")
-                parsed = (parse_betclan(html, url) if source == "BETCLAN"
-                          else parse_sportytrader(html, url))
+                parsed = (parse_betclan(html, url, listing_clocks.get(url))
+                          if source == "BETCLAN" else parse_sportytrader(html, url))
                 if parsed is None:
                     raise ValueError("invalid_source_detail_structure")
                 parsed["captured_at"] = output["generated_at"]
@@ -349,6 +454,12 @@ def collect(limit=100, pause=0.4, session=None, source=None, evidence_dir=None, 
                 diag["failed"] += 1
                 diag["last_error"] = type(exc).__name__
             time.sleep(pause)
+        if source == "BETCLAN":
+            diag["listing_utc_proofs"] = sum(p is not None for p in listing_clocks.values())
+            diag["clock_conflicts_resolved"] = sum(
+                r.get("source") == "BETCLAN" and
+                r.get("source_clock_basis") == "LISTING_UTC_CONFIRMED_DETAIL_CLOCK_CONFLICT"
+                for r in output["records"])
         diag["status"] = ("CAPTURED_UNMATCHED" if diag["parsed"] else
                           "PARSE_FAILED" if diag["candidate_urls"] else "SOURCE_UNAVAILABLE")
         output["providers"][source] = diag
