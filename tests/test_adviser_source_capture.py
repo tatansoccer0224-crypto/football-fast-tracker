@@ -227,6 +227,7 @@ class BetClanUTCListingCrosscheckTest(unittest.TestCase):
         row = parse_betclan(self.detail(), self.URL, proof)
         self.assertEqual(row["source_kickoff"], "2026-11-08T17:00:00+00:00")
         self.assertEqual(row["source_detail_kickoff"], "2026-11-08T17:00:00+01:00")
+        self.assertEqual(row["source_listing_kickoff"], "2026-11-08T17:00:00Z")
         self.assertEqual(row["source_clock_disagreement_minutes"], 60)
         self.assertEqual(row["source_clock_basis"], "LISTING_UTC_CONFIRMED_DETAIL_CLOCK_CONFLICT")
         self.assertTrue(row["kickoff_timezone_verified"])
