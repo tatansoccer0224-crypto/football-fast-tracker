@@ -12,6 +12,7 @@ on:
     paths:
       - 'scripts/adviser_source_capture.py'
       - 'tests/test_adviser_source_capture.py'
+      - '.github/workflows/adviser-source-capture.yml'
   pull_request:
     branches: [main]
     paths:
@@ -74,7 +75,9 @@ jobs:
           PY
       - name: Collect today's and tomorrow's source records
         if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.replay_run_id == '')
-        run: python scripts/adviser_source_capture.py --output /tmp/adviser-source.json --limit 100 --evidence-dir /tmp/adviser-evidence --related-evidence-limit 8
+        # Bounded daily capture: at most 120 tips/provider (240 records total)
+        # and no more than 8 independently linked SportyTrader event checks.
+        run: python scripts/adviser_source_capture.py --output /tmp/adviser-source.json --limit 120 --evidence-dir /tmp/adviser-evidence --related-evidence-limit 8
       - name: Publish authenticated observations on main
         if: github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         env:
