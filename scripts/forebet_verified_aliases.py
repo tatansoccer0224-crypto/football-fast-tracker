@@ -76,6 +76,56 @@ def native_verified_catalog():
     rows=data.get("rows")
     if not isinstance(rows,list) or not 200<=len(rows)<=400:
         raise ValueError("FOREBET_NATIVE_ALIASES_COVERAGE_INVALID")
+    # Preserve the original Oct 18 snapshot. Nov 8 additions have genuine
+    # evidence from TWO independent adviser captures plus ONE native
+    # Flashscore event (unique oriented pair, league and source date).
+    # This is not the provisional-only 30% fuzzy match pathway.
+    extra=json.loads((Path(__file__).resolve().parent.parent/
+        "data/forebet_native_cross_provider_aliases_20261108.json").read_text(encoding="utf-8"))
+    if (extra.get("snapshot_type")!="FOREBET_FLASHSCORE_NATIVE_INDEPENDENT_SOURCE_CORROBORATION_V1"
+        or extra.get("policy")!="EXACT_UNIQUE_FS_NATIVE_FIXTURE_TWO_INDEPENDENT_ADVISERS_SOURCE_DATE_LEAGUE_PAIR"
+        or extra.get("method")!="FOREBET_SPORTYTRADER_FLASHSCORE_THREE_SOURCE_PAIR_IDENTITY"
+        or not isinstance(extra.get("rows"),list) or len(extra["rows"])!=3):
+        raise ValueError("FOREBET_CROSS_PROVIDER_PROVENANCE_INVALID")
+    for entry in extra["rows"]:
+        if not isinstance(entry,dict):
+            raise ValueError("FOREBET_CROSS_PROVIDER_ROW_INVALID")
+        link=entry.get("independent_source_url")
+        independent_id=entry.get("independent_source_event_id")
+        stamp=entry.get("canonical_kickoff_utc")
+        if (not isinstance(link,str) or
+            not re.fullmatch(r"https://www\.sportytrader\.com/en/betting-tips/[^/?#]+-\d{5,12}/",link)
+            or not isinstance(independent_id,str)
+            or not link.endswith("-"+independent_id+"/")
+            or entry.get("native_event_unique_count")!=1
+            or type(entry.get("forebet_observation_runs")) is not int
+            or entry["forebet_observation_runs"]<3
+            or type(entry.get("independent_observations")) is not int
+            or entry["independent_observations"]<2
+            or not isinstance(stamp,str)
+            or not re.fullmatch(r"2026-11-08T(?:[01]\d|2[0-3]):[0-5]\d:00Z",stamp)
+            or entry.get("independent_competition")!=entry.get("canonical_competition")
+            or (entry.get("source_competition"),entry.get("canonical_competition"))
+               not in (("De1","Bundesliga"),("Es1","LaLiga"))
+            or (entry.get("independent_utc_kickoff") is not None and
+                entry.get("independent_utc_kickoff")!=stamp)):
+            raise ValueError("FOREBET_CROSS_PROVIDER_EVIDENCE_INVALID")
+        src_home=norm(entry.get("source_fixture_home"))
+        src_away=norm(entry.get("source_fixture_away"))
+        other_home=norm(entry.get("independent_fixture_home"))
+        other_away=norm(entry.get("independent_fixture_away"))
+        native_home=norm(entry.get("canonical_fixture_home"))
+        native_away=norm(entry.get("canonical_fixture_away"))
+        source_alias=norm(entry.get("source_name"))
+        target_alias=norm(entry.get("flashscore_name"))
+        if (not src_home or not src_away or
+            src_home!=other_home or src_away!=other_away or
+            not ((source_alias==src_home and target_alias==native_home
+                  and src_away==native_away)
+                 or (source_alias==src_away and target_alias==native_away
+                     and src_home==native_home))):
+            raise ValueError("FOREBET_CROSS_PROVIDER_ORIENTED_PAIR_CONFLICT")
+    rows=rows+extra["rows"]
     source_ids,target_ids,forms={},{},{}
     for r in rows:
         if not isinstance(r,dict): raise ValueError("FOREBET_NATIVE_ALIAS_ROW_INVALID")
