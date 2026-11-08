@@ -17,7 +17,7 @@ stats = {"html_bytes": len(html.encode()), "cards": len(cards),
          "cards_with_teams": 0, "cards_with_script": 0,
          "sportsevents_in_cards": 0, "sportsevents_utc": 0,
          "sportsevents_other_zone": 0, "json_parse_failures": 0, "json_empty_string": 0,
-         "json_types": {}, "json_preview": None, "event_url_equal_anchor": 0,
+         "json_types": {}, "json_preview": None, "json_error_examples": [], "event_url_equal_anchor": 0,
          "event_names_equal_card": 0, "utc_time_equal_clock": 0,
          "examples": []}
 for cell in cards:
@@ -43,8 +43,16 @@ for cell in cards:
                 if isinstance(node, dict):
                     k=str(node.get("@type"))
                     stats["json_types"][k] = stats["json_types"].get(k, 0) + 1
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as exc:
             stats["json_parse_failures"] += 1
+            if len(stats["json_error_examples"]) < 4:
+                at = getattr(exc, "pos", 0)
+                stats["json_error_examples"].append({
+                    "error_type": type(exc).__name__, "position": at,
+                    "reason": getattr(exc,"msg",str(exc))[:90],
+                    "snippet": str(raw)[max(0,at-60):at+90],
+                    "length": len(str(raw))
+                })
             continue
         for ev in data if isinstance(data, list) else [data]:
             if not isinstance(ev, dict) or ev.get("@type") != "SportsEvent":
