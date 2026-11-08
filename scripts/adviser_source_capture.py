@@ -12,6 +12,7 @@ import math
 import re
 import time
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
@@ -236,6 +237,69 @@ def parse_betclan(html, url, listing_evidence=None):
     }
 
 
+
+def sportytrader_faq_utc(soup, home, away, source_date):
+    """Use only fixture-specific dated FAQ UK/GMT/UTC time on the same tip URL.
+
+    This proves nothing alone: a separately linked SportsEvent must corroborate
+    the UTC instant, exact URL, oriented teams and league before verified kickoff.
+    """
+    try:
+        d = datetime.strptime(source_date, "%Y-%m-%d")
+    except (TypeError, ValueError):
+        return None
+    month = d.strftime("%B")
+    month_short = d.strftime("%b")
+    day = str(d.day)
+    date_pattern = (r"\b(?:" + re.escape(month) + "|" + re.escape(month_short) +
+                    r")\s+0?" + day + r"\b|\b0?" + day +
+                    r"\s+(?:" + re.escape(month) + "|" + re.escape(month_short) + r")\b")
+    proofs = []
+    for script in soup.select('script[type="application/ld+json"]'):
+        try:
+            data = json.loads(script.get_text())
+        except (TypeError, ValueError):
+            continue
+        for node in data if isinstance(data, list) else [data]:
+            if not isinstance(node, dict) or node.get("@type") != "FAQPage":
+                continue
+            for item in node.get("mainEntity", []):
+                if not isinstance(item, dict) or item.get("@type") != "Question":
+                    continue
+                question = str(item.get("name") or "")
+                if ("when" not in question.casefold()
+                    or home.casefold() not in question.casefold()
+                    or away.casefold() not in question.casefold()):
+                    continue
+                ans = item.get("acceptedAnswer")
+                if not isinstance(ans, dict) or not isinstance(ans.get("text"), str):
+                    continue
+                answer = BeautifulSoup(ans["text"], "html.parser").get_text(" ", strip=True)
+                if len(answer) > 650 or not re.search(date_pattern, answer, re.I):
+                    continue
+                years = re.findall(r"\b20\d{2}\b", answer)
+                if years and any(y != str(d.year) for y in years):
+                    continue
+                matches = re.findall(
+                    r"\b([01]?\d|2[0-3]):([0-5]\d)\s*(GMT|UTC|UK\s+time)\b", answer, re.I)
+                if len(matches) != 1:
+                    continue
+                hour, minute, label = matches[0]
+                tz_label = re.sub(r"\s+", " ", label.strip()).upper()
+                zone = timezone.utc if tz_label in ("GMT", "UTC") else ZoneInfo("Europe/London")
+                local = datetime(d.year, d.month, d.day, int(hour), int(minute), tzinfo=zone)
+                # Fall-back 01:xx UK time is ambiguous without a numeric offset.
+                if local.utcoffset() != local.replace(fold=1).utcoffset():
+                    continue
+                proofs.append((local.astimezone(timezone.utc).isoformat(),
+                               question[:160], answer[:500], tz_label))
+    if len(proofs) != 1:
+        return None
+    instant, question, answer, label = proofs[0]
+    return {"kickoff_utc": instant, "question": question,
+            "answer": answer, "time_label": label}
+
+
 def parse_sportytrader(html, url):
     soup = BeautifulSoup(html, "html.parser")
     h1 = soup.find("h1")
@@ -268,12 +332,16 @@ def parse_sportytrader(html, url):
         "draw": percentage(d.group(1)) if d else None,
         "away": percentage(a.group(1)) if a else None,
     })
+    source_date = f"{dt.group(3)}-{dt.group(2)}-{dt.group(1)}"
+    faq = sportytrader_faq_utc(soup, pair.group(1).strip(), pair.group(2).strip(), source_date)
     return {
         "source": "SPORTYTRADER", "source_url": url,
         "source_event_id": re.search(r"-(\d+)/?$", url).group(1),
         "home": pair.group(1).strip(), "away": pair.group(2).strip(),
-        "source_date": f"{dt.group(3)}-{dt.group(2)}-{dt.group(1)}",
+        "source_date": source_date,
         "source_wall_time": dt.group(4), "kickoff_timezone_verified": False,
+        "source_faq_kickoff_utc": faq["kickoff_utc"] if faq else None,
+        "source_faq_evidence": faq,
         "source_competition": (re.split(r'Prediction\s*&\s*Betting Tips\s*-\s*', title, flags=re.I)[1].strip()
                                if re.search(r'Prediction\s*&\s*Betting Tips\s*-\s*', title, re.I) else None),
         # A written tip is not a probability triplet; never invent 1X2 from odds.
@@ -301,7 +369,12 @@ def enrich_sportytrader_event(row, html, url):
             if not isinstance(kickoff, str) or not re.search(r'(Z|[+-]\d{2}:\d{2})$', kickoff):
                 continue
             at = datetime.fromisoformat(kickoff.replace('Z', '+00:00'))
-            if event.get('url') != url or at.strftime('%Y-%m-%d') != row['source_date'] or at.strftime('%H:%M') != row['source_wall_time']:
+            faq_utc = row.get('source_faq_kickoff_utc')
+            wall_agrees = at.strftime('%H:%M') == row['source_wall_time']
+            faq_agrees = isinstance(faq_utc, str) and at.astimezone(timezone.utc).isoformat() == faq_utc
+            if (event.get('url') != url or at.strftime('%Y-%m-%d') != row['source_date']
+                or (not wall_agrees and not faq_agrees)
+                or (faq_utc is not None and not faq_agrees)):
                 continue
             if any(event.get(side+'Team', {}).get('name', '').strip().casefold() != row[side].strip().casefold() for side in ('home', 'away')):
                 continue
@@ -317,6 +390,7 @@ def enrich_sportytrader_event(row, html, url):
     return {**row, 'source_kickoff': kickoff, 'source_timezone': kickoff[-6:] if not kickoff.endswith('Z') else 'UTC',
             'source_competition': competition, 'kickoff_timezone_verified': True,
             'source_event_status': event.get('eventStatus'), 'related_event_evidence': event,
+            'source_clock_basis': ('FAQ_GMT_AND_LINKED_SPORTSEVENT' if row.get('source_faq_kickoff_utc') else 'WALL_CLOCK_AND_LINKED_SPORTSEVENT'),
             'parser_version': 'sportytrader-v2-linked-sportsevent'}
 
 
