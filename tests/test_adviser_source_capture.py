@@ -222,6 +222,38 @@ class BetClanUTCListingCrosscheckTest(unittest.TestCase):
                 '<h4>Total Goals 2.5</h4><p>Over 51%</p>'
                 f'<script type="application/ld+json">{json.dumps(event)}</script>')
 
+    def test_malformed_live_listing_single_extra_brace_recovers_without_guessing(self):
+        # Captured from BetClan's 2026-11-08 listing: 500 SportsEvent JSON-LD
+        # scripts had exactly one extra } after otherwise valid source JSON.
+        original=self.listing()
+        malformed=original.replace("</script>", "}</script>")
+        events=betclan_utc_listing_evidence(malformed)
+        self.assertIn(self.URL,events)
+        self.assertEqual(events[self.URL]["startDate"],"2026-11-08T17:00:00Z")
+        row=parse_betclan(self.detail(),self.URL,events[self.URL])
+        self.assertEqual(row["source_kickoff"],"2026-11-08T17:00:00+00:00")
+        self.assertEqual(row["source_clock_disagreement_minutes"],60)
+
+    def test_more_than_one_trailing_brace_is_not_silently_recovered(self):
+        for bad in ('}}</script>', '}</script>injected',
+                    '"other":true}</script>'):
+            data=self.listing().replace("</script>",bad)
+            self.assertNotIn(self.URL,betclan_utc_listing_evidence(data))
+
+    def test_list_detail_reconciliation_with_exact_one_brace_in_both_listings(self):
+        calls=[]
+        listing=self.listing().replace("</script>", "}</script>")
+        def fake_fetch(session,url):
+            calls.append(url)
+            return self.detail() if url==self.URL else listing
+        with patch("scripts.adviser_source_capture.fetch",side_effect=fake_fetch):
+            out=collect(source="BETCLAN",limit=1,pause=0)
+        self.assertEqual(len(calls),3)
+        self.assertEqual(out["providers"]["BETCLAN"]["listing_utc_proofs"],1)
+        self.assertEqual(out["providers"]["BETCLAN"]["clock_conflicts_resolved"],1)
+        self.assertEqual(out["records"][0]["source_kickoff"],"2026-11-08T17:00:00+00:00")
+
+
     def test_real_utc_conflict_is_resolved_from_exact_listing_sportsevent(self):
         proof = betclan_utc_listing_evidence(self.listing())[self.URL]
         row = parse_betclan(self.detail(), self.URL, proof)
