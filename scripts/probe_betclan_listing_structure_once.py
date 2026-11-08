@@ -37,7 +37,15 @@ for cell in cards:
                 stats["json_empty_string"] += 1
             if stats["json_preview"] is None:
                 stats["json_preview"] = str(raw)[:120]
-            data = json.loads(raw)
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError as broken:
+                trimmed = raw.rstrip()
+                if (broken.msg == "Extra data"
+                    and broken.pos == len(trimmed)-1 and trimmed.endswith("}")):
+                    data = json.loads(trimmed[:-1])
+                else:
+                    raise
             types = (data if isinstance(data, list) else [data])
             for node in types:
                 if isinstance(node, dict):
