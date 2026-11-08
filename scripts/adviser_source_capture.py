@@ -300,8 +300,52 @@ def sportytrader_faq_utc(soup, home, away, source_date):
             "answer": answer, "time_label": label}
 
 
+
+def sportytrader_is_football_tip(soup):
+    """Reject non-football tips leaked through football page recommendations.
+
+    Inspect ONLY the tip's structured BreadcrumbList, not global navigation
+    that links all sports. Explicit rugby/basketball/etc. reject; missing
+    breadcrumb remains source-only, without guessed canonical fixture.
+    """
+    categories=set()
+    saw=False
+    for script in soup.select('script[type="application/ld+json"]'):
+        raw=script.get_text()
+        if "BreadcrumbList" not in raw:
+            continue
+        saw=True
+        try:
+            data=json.loads(raw)
+        except (ValueError,TypeError):
+            return False
+        for node in data if isinstance(data,list) else [data]:
+            if not isinstance(node,dict) or node.get("@type")!="BreadcrumbList":
+                continue
+            items=node.get("itemListElement",[])
+            if not isinstance(items,list):
+                return False
+            for item in items:
+                if not isinstance(item,dict):
+                    return False
+                url=item.get("item")
+                if isinstance(url,dict):
+                    url=url.get("@id") or url.get("url")
+                if not isinstance(url,str):
+                    continue
+                parsed=urlparse(url)
+                if parsed.scheme!="https" or parsed.hostname!=HOSTS["SPORTYTRADER"]:
+                    return False
+                found=re.match(r"^/en/betting-tips/([^/]+)/",parsed.path)
+                if found:
+                    categories.add(found.group(1).casefold())
+    return categories=={"football"} if saw else True
+
+
 def parse_sportytrader(html, url):
     soup = BeautifulSoup(html, "html.parser")
+    if not sportytrader_is_football_tip(soup):
+        return None
     h1 = soup.find("h1")
     if not h1:
         return None
@@ -524,6 +568,10 @@ def collect(limit=100, pause=0.4, session=None, source=None, evidence_dir=None, 
                 parsed = (parse_betclan(html, url, listing_clocks.get(url))
                           if source == "BETCLAN" else parse_sportytrader(html, url))
                 if parsed is None:
+                    if source == "SPORTYTRADER" and not sportytrader_is_football_tip(
+                        BeautifulSoup(html, "html.parser")
+                    ):
+                        diag["nonfootball_rejected"] = diag.get("nonfootball_rejected", 0) + 1
                     raise ValueError("invalid_source_detail_structure")
                 parsed["captured_at"] = output["generated_at"]
                 parsed["raw_content_hash"] = evidence_hash
