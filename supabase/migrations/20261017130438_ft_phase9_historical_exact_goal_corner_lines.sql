@@ -1,0 +1,136 @@
+-- Phase 9: add observed exact threshold counts to the EXISTING 5-match historical form RPC.
+-- No live prediction, no new source, no additional database query or scheduler.
+-- Existing exact league/team lookup, strict past-date cutoff and sample cap retained.
+-- Add historical outcome frequencies to the existing validated domestic-form
+-- summary. These are recorded results only, not current forecasts or prices.
+CREATE OR REPLACE FUNCTION public.ft_historical_form_by_team(
+  p_team_name text,
+  p_league_name text,
+  p_fixture_kickoff timestamp with time zone
+)
+RETURNS jsonb
+LANGUAGE sql
+STABLE
+SET search_path TO 'public', 'pg_temp'
+AS $function$
+WITH league AS (
+  SELECT CASE p_league_name
+    WHEN 'Premier League' THEN 'E0'
+    WHEN 'Championship' THEN 'E1'
+    WHEN 'League One' THEN 'E2'
+    WHEN 'League Two' THEN 'E3'
+    WHEN 'Ligue 1' THEN 'F1'
+    WHEN 'Ligue 2' THEN 'F2'
+    WHEN 'Serie A' THEN 'I1'
+    WHEN 'Serie B' THEN 'I2'
+    WHEN 'LaLiga' THEN 'SP1'
+    WHEN 'LaLiga 2' THEN 'SP2'
+    WHEN 'Bundesliga' THEN 'D1'
+    WHEN '2. Bundesliga' THEN 'D2'
+    WHEN 'Eredivisie' THEN 'N1'
+    WHEN 'Primeira Liga' THEN 'P1'
+    WHEN 'Scottish Premiership' THEN 'SC0'
+    ELSE NULL
+  END AS league_code,
+  regexp_replace(lower(coalesce(p_team_name,'')),'[^a-z0-9]','','g') AS team_name_key
+),
+prior AS (
+  SELECT m.match_date,m.match_key,m.fthg,m.ftag,m.ftr,
+    m.home_corners,m.away_corners,
+    regexp_replace(lower(m.home_team),'[^a-z0-9]','','g')=(SELECT team_name_key FROM league) AS home_side
+  FROM public.football_data_matches m
+  WHERE m.source_kind='RESULTS'
+    AND m.league_code=(SELECT league_code FROM league)
+    AND (SELECT team_name_key FROM league)<>''
+    -- Strict date cutoff in the competition's local calendar: no same-day
+    -- target fixture or future result can enter the form window.
+    AND m.match_date<(p_fixture_kickoff AT TIME ZONE 'Europe/London')::date
+    AND m.ftr IN ('H','D','A') AND m.fthg IS NOT NULL AND m.ftag IS NOT NULL
+    AND m.fthg>=0 AND m.ftag>=0
+    AND (
+      regexp_replace(lower(m.home_team),'[^a-z0-9]','','g')=(SELECT team_name_key FROM league)
+      OR regexp_replace(lower(m.away_team),'[^a-z0-9]','','g')=(SELECT team_name_key FROM league)
+    )
+  ORDER BY m.match_date DESC,m.match_key DESC
+  LIMIT 5
+),
+outcomes AS (
+  SELECT match_date,match_key,
+    CASE WHEN ftr='D' THEN 'D'
+         WHEN (home_side AND ftr='H') OR (NOT home_side AND ftr='A') THEN 'W'
+         ELSE 'L' END AS result,
+    CASE WHEN home_side THEN fthg ELSE ftag END AS goals_for,
+    CASE WHEN home_side THEN ftag ELSE fthg END AS goals_against,
+    CASE WHEN home_side THEN home_corners ELSE away_corners END AS corners_for,
+    CASE WHEN home_side THEN away_corners ELSE home_corners END AS corners_against,
+    fthg+ftag AS total_goals,
+    CASE WHEN home_corners IS NOT NULL AND away_corners IS NOT NULL
+      THEN home_corners+away_corners END AS total_corners
+  FROM prior
+),
+summary AS (
+  SELECT count(*) AS n,
+    string_agg(result,'' ORDER BY match_date DESC,match_key DESC) AS sequence,
+    count(*) FILTER(WHERE result='W') AS wins,
+    count(*) FILTER(WHERE result='D') AS draws,
+    count(*) FILTER(WHERE result='L') AS losses,
+    sum(goals_for) AS goals_for,
+    sum(goals_against) AS goals_against,
+    max(match_date) AS last_match_date,
+    count(*) FILTER(WHERE total_goals>1) AS over15_count,
+    count(*) FILTER(WHERE total_goals>2) AS over25_count,
+    count(*) FILTER(WHERE total_goals>3) AS over35_count,
+    count(*) FILTER(WHERE total_goals>4) AS over45_count,
+    round(100.0*count(*) FILTER(WHERE total_goals>2)/NULLIF(count(*),0),1) AS over25_rate,
+    round(avg(total_goals),1) AS avg_total_goals,
+    count(*) FILTER(WHERE goals_for>0 AND goals_against>0) AS btts_count,
+    round(100.0*count(*) FILTER(WHERE goals_for>0 AND goals_against>0)/NULLIF(count(*),0),1) AS btts_rate,
+    count(*) FILTER(WHERE total_corners IS NOT NULL) AS matches_with_corners,
+    count(*) FILTER(WHERE total_corners>8) AS over85_corners_count,
+    count(*) FILTER(WHERE total_corners>9.5) AS over95_corners_count,
+    count(*) FILTER(WHERE total_corners>10) AS over105_corners_count,
+    count(*) FILTER(WHERE total_corners>11) AS over115_corners_count,
+    count(*) FILTER(WHERE total_corners<=9.5) AS under95_corners_count,
+    round(100.0*count(*) FILTER(WHERE total_corners>9.5)/NULLIF(count(*) FILTER(WHERE total_corners IS NOT NULL),0),1) AS over95_corners_rate,
+    round(100.0*count(*) FILTER(WHERE total_corners<=9.5)/NULLIF(count(*) FILTER(WHERE total_corners IS NOT NULL),0),1) AS under95_corners_rate,
+    round(avg(corners_for) FILTER(WHERE corners_for IS NOT NULL),1) AS avg_corners_for,
+    round(avg(corners_against) FILTER(WHERE corners_against IS NOT NULL),1) AS avg_corners_against,
+    round(avg(total_corners),1) AS avg_total_corners
+  FROM outcomes
+)
+SELECT CASE WHEN n>=3 THEN jsonb_build_object(
+  'source','football-data.co.uk',
+  'scope','domestic-league-results-only',
+  'resultsNewestFirst',sequence,
+  'matches',n,'wins',wins,'draws',draws,'losses',losses,
+  'goalsFor',goals_for,'goalsAgainst',goals_against,
+  'throughDate',last_match_date,
+  'over25Count',over25_count,'over25Rate',over25_rate,
+  'observedGoalLines',jsonb_build_object(
+    '1.5',jsonb_build_object('overCount',over15_count,'underCount',n-over15_count,'sample',n),
+    '2.5',jsonb_build_object('overCount',over25_count,'underCount',n-over25_count,'sample',n),
+    '3.5',jsonb_build_object('overCount',over35_count,'underCount',n-over35_count,'sample',n),
+    '4.5',jsonb_build_object('overCount',over45_count,'underCount',n-over45_count,'sample',n)
+  ),
+  'averageGoals',avg_total_goals,
+  'bttsCount',btts_count,'bttsRate',btts_rate,
+  'matchesWithCorners',matches_with_corners,
+  -- A missing corner is missing evidence, never a counted 'Under'.
+  -- >=3 observations to show any historical corner threshold.
+  'observedCornerLines',case when matches_with_corners>=3 then jsonb_build_object(
+    '8.5',jsonb_build_object('overCount',over85_corners_count,'underCount',matches_with_corners-over85_corners_count,'sample',matches_with_corners),
+    '9.5',jsonb_build_object('overCount',over95_corners_count,'underCount',matches_with_corners-over95_corners_count,'sample',matches_with_corners),
+    '10.5',jsonb_build_object('overCount',over105_corners_count,'underCount',matches_with_corners-over105_corners_count,'sample',matches_with_corners),
+    '11.5',jsonb_build_object('overCount',over115_corners_count,'underCount',matches_with_corners-over115_corners_count,'sample',matches_with_corners)
+  ) else null end,
+  'over95CornersCount',over95_corners_count,
+  'under95CornersCount',under95_corners_count,
+  'over95CornersRate',over95_corners_rate,
+  'under95CornersRate',under95_corners_rate,
+  'averageCornersFor',avg_corners_for,
+  'averageCornersAgainst',avg_corners_against,
+  'averageTotalCorners',avg_total_corners,
+  'limitedToFileCoverage',true
+) ELSE NULL END
+FROM summary;
+$function$;
