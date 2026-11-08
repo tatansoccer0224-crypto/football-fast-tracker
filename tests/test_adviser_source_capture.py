@@ -402,6 +402,8 @@ class SportyTraderSportBoundaryTest(unittest.TestCase):
             {"@type":"ListItem","item":"https://www.sportytrader.com/en/"},
             {"@type":"ListItem","item":"https://www.sportytrader.com/en/betting-tips/"},
             {"@type":"ListItem","item":f"https://www.sportytrader.com/en/betting-tips/{sport}/"},
+            {"@type":"ListItem","item":f"https://www.sportytrader.com/en/betting-tips/{sport}/england/premier-league-49/"},
+            {"@type":"ListItem","item":"https://www.sportytrader.com/en/betting-tips/england-australia-386278/"},
         ]}
         nav = ('<a href="/en/betting-tips/rugby/">Global Nav Rugby</a>'
                if extra_nav else '')
@@ -417,6 +419,14 @@ class SportyTraderSportBoundaryTest(unittest.TestCase):
             BeautifulSoup(self.detail("rugby"),"html.parser")))
         self.assertIsNone(parse_sportytrader(self.detail("rugby"),url))
         self.assertIsNotNone(parse_sportytrader(self.detail("football"),url))
+
+    def test_actual_five_item_football_breadcrumb_ignores_tip_slug(self):
+        from bs4 import BeautifulSoup
+        from scripts.adviser_source_capture import sportytrader_is_football_tip
+        html=self.detail("football")
+        self.assertTrue(sportytrader_is_football_tip(BeautifulSoup(html,"html.parser")))
+        self.assertIsNotNone(parse_sportytrader(
+            html,"https://www.sportytrader.com/en/betting-tips/england-australia-386278/"))
 
     def test_generic_navigation_link_to_rugby_does_not_reject_football(self):
         url="https://www.sportytrader.com/en/betting-tips/england-australia-386278/"

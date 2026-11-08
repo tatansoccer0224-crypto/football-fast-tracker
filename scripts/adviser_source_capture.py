@@ -336,8 +336,11 @@ def sportytrader_is_football_tip(soup):
                 parsed=urlparse(url)
                 if parsed.scheme!="https" or parsed.hostname!=HOSTS["SPORTYTRADER"]:
                     return False
-                found=re.match(r"^/en/betting-tips/([^/]+)/",parsed.path)
-                if found:
+                # Category breadcrumb: /en/betting-tips/football/.
+                # Last breadcrumb is the actual event /en/betting-tips/brighton-...-385770/,
+                # NOT a sport. Exclude all event slugs with numeric provider IDs.
+                found=re.fullmatch(r"/en/betting-tips/([^/]+)/",parsed.path)
+                if found and not re.search(r"-[0-9]{5,12}$",found.group(1)):
                     categories.add(found.group(1).casefold())
     return categories=={"football"} if saw else True
 
