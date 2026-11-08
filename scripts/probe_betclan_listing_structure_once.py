@@ -16,7 +16,8 @@ stats = {"html_bytes": len(html.encode()), "cards": len(cards),
          "cards_with_url": 0, "cards_with_clock": 0,
          "cards_with_teams": 0, "cards_with_script": 0,
          "sportsevents_in_cards": 0, "sportsevents_utc": 0,
-         "sportsevents_other_zone": 0, "event_url_equal_anchor": 0,
+         "sportsevents_other_zone": 0, "json_parse_failures": 0, "json_empty_string": 0,
+         "json_types": {}, "json_preview": None, "event_url_equal_anchor": 0,
          "event_names_equal_card": 0, "utc_time_equal_clock": 0,
          "examples": []}
 for cell in cards:
@@ -31,8 +32,19 @@ for cell in cards:
     stats["cards_with_script"] += bool(scripts)
     for s in scripts:
         try:
-            data = json.loads(s.string or "")
+            raw = s.string or ""
+            if not raw:
+                stats["json_empty_string"] += 1
+            if stats["json_preview"] is None:
+                stats["json_preview"] = str(raw)[:120]
+            data = json.loads(raw)
+            types = (data if isinstance(data, list) else [data])
+            for node in types:
+                if isinstance(node, dict):
+                    k=str(node.get("@type"))
+                    stats["json_types"][k] = stats["json_types"].get(k, 0) + 1
         except (TypeError, ValueError):
+            stats["json_parse_failures"] += 1
             continue
         for ev in data if isinstance(data, list) else [data]:
             if not isinstance(ev, dict) or ev.get("@type") != "SportsEvent":
