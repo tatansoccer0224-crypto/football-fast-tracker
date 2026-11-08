@@ -4,6 +4,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 from scripts.adviser_source_capture import parse_betclan, parse_sportytrader, candidate_urls, valid_triplet
+from scripts.adviser_source_capture import betclan_utc_listing_evidence
 from scripts.adviser_source_capture import collect
 from scripts.adviser_source_capture import enrich_sportytrader_event
 from scripts.adviser_source_capture import replay_saved_evidence
@@ -187,6 +188,92 @@ class AdviserSourceCaptureTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BetClanUTCListingCrosscheckTest(unittest.TestCase):
+    """Exact current-source regression; no HTTP calls and no guessed DST shift."""
+    URL = ("https://www.betclan.com/predictionsdetails/football/1550191/"
+           "inter-v-como-prediction-h2h-tip-and-match-preview/")
+
+    def listing(self, start="2026-11-08T17:00:00Z", home="Inter",
+                away="Como", clock="17:00", league="Italy Serie A"):
+        import json
+        event = {
+            "@type": "SportsEvent", "url": self.URL, "startDate": start,
+            "homeTeam": {"name": home}, "awayTeam": {"name": away},
+            "location": {"name": league},
+        }
+        return (f'<div class="bclisttip"><a href="{self.URL}">'
+                f'<div class="bctime"><span class="convert_date">{clock}</span></div>'
+                f'<div class="bchome">{home}</div><div class="bcaway">{away}</div>'
+                f'</a><script type="application/ld+json">{json.dumps(event)}</script></div>')
+
+    def detail(self, start="2026-11-08T17:00:00+01:00", home="Inter",
+               away="Como", league="Italy Serie A"):
+        import json
+        event = {
+            "@type": "SportsEvent", "url": self.URL, "startDate": start,
+            "homeTeam": {"name": home}, "awayTeam": {"name": away},
+            "organizer": {"name": league},
+        }
+        return (f'<h1>{home} vs {away} Prediction</h1>'
+                f'<div>Date 2026-11-08 17:00</div>'
+                '<h4>Winner</h4><p>Home 60% Draw 20% Away 20%</p>'
+                '<h4>Total Goals 2.5</h4><p>Over 51%</p>'
+                f'<script type="application/ld+json">{json.dumps(event)}</script>')
+
+    def test_real_utc_conflict_is_resolved_from_exact_listing_sportsevent(self):
+        proof = betclan_utc_listing_evidence(self.listing())[self.URL]
+        row = parse_betclan(self.detail(), self.URL, proof)
+        self.assertEqual(row["source_kickoff"], "2026-11-08T17:00:00+00:00")
+        self.assertEqual(row["source_detail_kickoff"], "2026-11-08T17:00:00+01:00")
+        self.assertEqual(row["source_clock_disagreement_minutes"], 60)
+        self.assertEqual(row["source_clock_basis"], "LISTING_UTC_CONFIRMED_DETAIL_CLOCK_CONFLICT")
+        self.assertTrue(row["kickoff_timezone_verified"])
+        self.assertEqual(row["source_competition"], "Italy Serie A")
+        self.assertIsNone(row["canonical_event_id"])
+
+    def test_source_does_not_gain_utc_proof_from_wrong_team_or_time(self):
+        for html in [
+            self.listing().replace('"name": "Inter"', '"name": "Other Team"'),
+            self.listing(clock="16:00"),
+            self.listing(start="2026-11-08T17:00:00+01:00"),
+            self.listing(start="2026-11-08T16:00:00Z"),
+        ]:
+            self.assertNotIn(self.URL, betclan_utc_listing_evidence(html))
+        for evidence in [None, {"startDate": "2026-11-08T17:00:00Z",
+                                "home": "Other Team", "away": "Como",
+                                "competition": "Italy Serie A"}]:
+            row = parse_betclan(self.detail(), self.URL, evidence)
+            self.assertEqual(row["source_kickoff"], "2026-11-08T17:00:00+01:00")
+
+    def test_conflicting_listing_duplicates_fail_closed(self):
+        html = self.listing() + self.listing(start="2026-11-08T18:00:00Z", clock="18:00")
+        self.assertNotIn(self.URL, betclan_utc_listing_evidence(html))
+
+    def test_multi_hour_conflict_remains_unknown(self):
+        row = parse_betclan(
+            self.detail(start="2026-11-08T17:00:00+03:00"),
+            self.URL, betclan_utc_listing_evidence(self.listing())[self.URL])
+        self.assertIsNone(row["source_kickoff"])
+        self.assertFalse(row["kickoff_timezone_verified"])
+        self.assertEqual(row["source_clock_basis"], "LISTING_DETAIL_CLOCK_CONFLICT_UNRESOLVED")
+
+    def test_collect_crosschecks_both_listing_pages_without_extra_http(self):
+        calls = []
+        listing = self.listing()
+        def fake_fetch(session, url):
+            calls.append(url)
+            return self.detail() if url == self.URL else listing
+        with patch("scripts.adviser_source_capture.fetch", side_effect=fake_fetch):
+            result = collect(source="BETCLAN", limit=1, pause=0)
+        self.assertEqual(len(calls), 3, "two existing source listings + one detail")
+        self.assertEqual(len(result["records"]), 1)
+        self.assertEqual(result["records"][0]["source_kickoff"],
+                         "2026-11-08T17:00:00+00:00")
+        self.assertEqual(result["providers"]["BETCLAN"]["clock_conflicts_resolved"], 1)
+        self.assertEqual(result["providers"]["BETCLAN"]["listing_utc_proofs"], 1)
+
 
 class BetClanRegressionTest(unittest.TestCase):
     def page(self, start='2026-10-15T00:30:00+01:00'):
