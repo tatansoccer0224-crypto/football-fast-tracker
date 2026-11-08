@@ -4,7 +4,7 @@ import { createRemoteJWKSet, jwtVerify } from "npm:jose@6.1.0";
 // GitHub-signed source-only publisher. Does not promote any forecast to VERIFIED.
 // Only this repository's exact main workflow may write to the private quarantine.
 const jwks = createRemoteJWKSet(new URL("https://token.actions.githubusercontent.com/.well-known/jwks"));
-const WF = "sargesticky-code/football-fast-tracker/.github/workflows/adviser-extra-source-evidence.yml@refs/heads/main";
+const WF = "tatansoccer0224-crypto/football-fast-tracker/.github/workflows/adviser-extra-source-evidence.yml@refs/heads/main";
 const response=(status:number,value:Record<string,unknown>)=>
   Response.json(value,{status,headers:{"cache-control":"no-store"}});
 Deno.serve(async(request:Request):Promise<Response>=>{
@@ -18,7 +18,7 @@ Deno.serve(async(request:Request):Promise<Response>=>{
       algorithms:["RS256"],clockTolerance:"30s"
     });
     const c=verified.payload;
-    if(c.repository!=="sargesticky-code/football-fast-tracker"
+    if(c.repository!=="tatansoccer0224-crypto/football-fast-tracker"
       ||c.ref!=="refs/heads/main"||c.workflow_ref!==WF
       ||!["push","schedule","workflow_dispatch"].includes(String(c.event_name))
       ||!/^[0-9]{6,20}$/.test(String(c.run_id))){
