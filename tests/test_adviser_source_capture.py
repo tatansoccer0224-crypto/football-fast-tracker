@@ -112,10 +112,41 @@ class BoundedSourceEvidenceTest(unittest.TestCase):
             "Linked SportyTrader event proves source clock but not Flashscore identity")
 
     def test_invalid_bounds_reject_before_network(self):
-        for kwargs in ({'limit':0}, {'limit':121}, {'source':'UNKNOWN'}, {'related_evidence_limit':9}, {'related_evidence_limit':1}):
+        for kwargs in ({'limit':0}, {'limit':121}, {'source':'UNKNOWN'}, {'related_evidence_limit':17}, {'related_evidence_limit':1}):
             with self.assertRaises(ValueError), patch('scripts.adviser_source_capture.fetch') as fetch:
                 collect(**kwargs)
             fetch.assert_not_called()
+
+    def test_sixteen_linked_proofs_is_valid_but_still_hard_capped(self):
+        # The daily linked-event proof budget increases but is never
+        # an unbounded scraper. Even if 17 links are supplied, only 16
+        # directly source-linked event pages may be requested.
+        listing="".join(
+            f'<a href="/en/betting-tips/testhome-testaway-{600000+i}/">tip</a>'
+            for i in range(17))
+        detail_html=lambda i: (
+            '<h1>Testhome vs Testaway Prediction & Betting Tips - Premier League</h1>'
+            '<p>08/11/2026 09:30</p><p>Prediction : BTTS</p>'
+            f'<a href="/en/results-live/testhome-testaway-{800000+i}/">Event</a>')
+        calls=[]
+        def fake_fetch(session,url):
+            calls.append(url)
+            if "/en/betting-tips/football/" in url:
+                return listing
+            import re
+            m=re.search(r"/en/betting-tips/testhome-testaway-(\\d+)/",url)
+            if m: return detail_html(int(m.group(1))-600000)
+            return '<html>No verified event JSON-LD</html>'
+        with tempfile.TemporaryDirectory() as tmp, patch(
+            'scripts.adviser_source_capture.fetch',side_effect=fake_fetch):
+            result=collect(source="SPORTYTRADER",limit=17,pause=0,
+                           evidence_dir=tmp,related_evidence_limit=16)
+        stats=result["providers"]["SPORTYTRADER"]
+        self.assertEqual(stats["related_attempted"],16)
+        self.assertEqual(stats["related_budget"],16)
+        self.assertEqual(sum("/en/results-live/" in url for url in calls),16)
+        self.assertEqual(len(result["records"]),17)
+        self.assertEqual(stats["related_verified_kickoff"] if "related_verified_kickoff" in stats else 0,0)
 
     def test_related_evidence_is_explicit_bounded_and_does_not_verify_kickoff(self):
         html = '<h1>QPR vs Derby Prediction</h1><p>16/10/2026 07:45</p><a href="/en/results-live/qpr-derby-123/">Live</a>'
