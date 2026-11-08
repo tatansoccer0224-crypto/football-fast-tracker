@@ -33,7 +33,7 @@ class SourceIdentityTests(unittest.TestCase):
 
     def test_new_native_flashscore_alias_snapshot_is_offline_and_strict(self):
         source_ids,target_ids,forms=native_verified_catalog()
-        self.assertEqual(len(source_ids),254)
+        self.assertEqual(len(source_ids),257)
         self.assertGreaterEqual(len(target_ids),240)
         self.assertEqual(source_ids[norm("Leeds United")],target_ids[norm("Leeds")])
         self.assertTrue(verified_source_name("Leeds United","Leeds"))
@@ -45,6 +45,46 @@ class SourceIdentityTests(unittest.TestCase):
         self.assertFalse(verified_source_name("Leeds United","Manchester Utd"))
         self.assertFalse(verified_source_name("Deportivo Toluca","Manchester Utd"))
 
+
+    def test_three_new_aliases_have_distinct_cross_provider_native_evidence(self):
+        """2026-11-08: 3 unique FS events, 3 Forebet runs, SportyTrader proof."""
+        import json
+        data=json.loads((Path(__file__).resolve().parents[1]/
+            "data/forebet_native_cross_provider_aliases_20261108.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(data["rows"]),3)
+        for r in data["rows"]:
+            self.assertEqual(r["native_event_unique_count"],1)
+            self.assertGreaterEqual(r["forebet_observation_runs"],3)
+            self.assertGreaterEqual(r["independent_observations"],2)
+            self.assertTrue(verified_source_name(r["source_name"],r["flashscore_name"]))
+            self.assertIn(norm(r["source_name"]),source_forms(r["flashscore_name"]))
+        self.assertTrue(verified_source_name("Köln","FC Koln"))
+        self.assertTrue(verified_source_name("Schalke 04","Schalke"))
+        self.assertTrue(verified_source_name("Atlético Madrid","Atl. Madrid"))
+        self.assertFalse(verified_source_name("Köln","Schalke"))
+        self.assertFalse(verified_source_name("Schalke 04","FC Koln"))
+        self.assertFalse(verified_source_name("Atlético Madrid","Real Madrid"))
+
+    def test_cross_provider_snapshot_never_waives_forebet_pair_league_or_clock(self):
+        matches=[
+           ("Köln","Bayer Leverkusen","FC Koln","Bayer Leverkusen","De1","Bundesliga"),
+           ("Hoffenheim","Schalke 04","Hoffenheim","Schalke","De1","Bundesliga"),
+           ("Atlético Madrid","Barcelona","Atl. Madrid","Barcelona","Es1","LaLiga")
+        ]
+        for home_src,away_src,home_fs,away_fs,code,league in matches:
+            row,target=sample()
+            row.update(home_team=home_src,away_team=away_src,league_short=code)
+            target.update(home=home_fs,away=away_fs,league=league)
+            published,failed=verified_rows([row],[target],NOW)
+            self.assertEqual(len(published),1,(home_src,away_src,failed))
+            self.assertEqual(published[0]["identity_method"],
+                             "VERIFIED_ALIAS_LEAGUE_AND_CALIBRATED_UTC_TIME")
+            bad_clock=dict(row,kickoff_text="10/15/2026 03:00 PM")
+            self.assertEqual(verified_rows([bad_clock],[target],NOW)[0],[])
+            bad_league=dict(row,league_short="It1")
+            self.assertEqual(verified_rows([bad_league],[target],NOW)[0],[])
+            swapped=dict(row,home_team=away_src,away_team=home_src)
+            self.assertEqual(verified_rows([swapped],[target],NOW)[0],[])
 
     def test_verified_flashscore_scope_accepts_600_and_fails_closed_above_cap(self):
         class Response:
