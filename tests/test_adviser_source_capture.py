@@ -393,6 +393,68 @@ class BetClanRegressionTest(unittest.TestCase):
             self.assertIsNone(valid_triplet(triplet))
 
 
+
+class SportyTraderSportBoundaryTest(unittest.TestCase):
+    """2026-11-08: a Rugby Nations Championship tip leaked via football links."""
+    def detail(self, sport="rugby", extra_nav=False):
+        import json
+        structured={"@type":"BreadcrumbList","itemListElement":[
+            {"@type":"ListItem","item":"https://www.sportytrader.com/en/"},
+            {"@type":"ListItem","item":"https://www.sportytrader.com/en/betting-tips/"},
+            {"@type":"ListItem","item":f"https://www.sportytrader.com/en/betting-tips/{sport}/"},
+        ]}
+        nav = ('<a href="/en/betting-tips/rugby/">Global Nav Rugby</a>'
+               if extra_nav else '')
+        return (nav+'<h1>England vs Australia Prediction & Betting Tips - Nations Championship</h1>'
+                '<p>08/11/2026 09:30</p><p>Prediction : BTTS</p>'
+                '<script type="application/ld+json">'+json.dumps(structured)+'</script>')
+
+    def test_actual_cross_sport_rugby_leak_is_rejected(self):
+        from bs4 import BeautifulSoup
+        from scripts.adviser_source_capture import sportytrader_is_football_tip
+        url="https://www.sportytrader.com/en/betting-tips/england-australia-386278/"
+        self.assertFalse(sportytrader_is_football_tip(
+            BeautifulSoup(self.detail("rugby"),"html.parser")))
+        self.assertIsNone(parse_sportytrader(self.detail("rugby"),url))
+        self.assertIsNotNone(parse_sportytrader(self.detail("football"),url))
+
+    def test_generic_navigation_link_to_rugby_does_not_reject_football(self):
+        url="https://www.sportytrader.com/en/betting-tips/england-australia-386278/"
+        self.assertIsNotNone(parse_sportytrader(
+            self.detail("football",extra_nav=True),url))
+
+    def test_mixed_breadcrumb_categories_and_broken_structured_proof_fail_closed(self):
+        import json
+        url="https://www.sportytrader.com/en/betting-tips/england-australia-386278/"
+        mixed=self.detail("football").replace(
+            '</script>',
+            '<!-- extra-category -->'
+            '</script>')
+        # Syntactically malformed structured BreadcrumbList is not accepted.
+        self.assertIsNone(parse_sportytrader(mixed,url))
+        compound={"@type":"BreadcrumbList","itemListElement":[
+            {"item":"https://www.sportytrader.com/en/betting-tips/football/"},
+            {"item":"https://www.sportytrader.com/en/betting-tips/rugby/"}
+        ]}
+        another=self.detail("football").replace(
+            self.detail("football").split('<script type="application/ld+json">')[1].split('</script>')[0],
+            json.dumps(compound))
+        self.assertIsNone(parse_sportytrader(another,url))
+
+    def test_capture_tracks_nonfootball_exclusions_not_false_predictions(self):
+        rugby="https://www.sportytrader.com/en/betting-tips/england-australia-386278/"
+        football="https://www.sportytrader.com/en/betting-tips/brighton-brentford-385770/"
+        listing=(f'<a href="{rugby}">Rugby</a><a href="{football}">Football</a>')
+        def fake_fetch(session,url):
+            return listing if url.endswith("/football/") or url.endswith("/football/tomorrow/") \
+                else self.detail("rugby" if url==rugby else "football")
+        with patch("scripts.adviser_source_capture.fetch",side_effect=fake_fetch):
+            report=collect(source="SPORTYTRADER",limit=2,pause=0)
+        self.assertEqual(report["providers"]["SPORTYTRADER"]["nonfootball_rejected"],1)
+        self.assertEqual(len(report["records"]),1)
+        self.assertEqual(report["records"][0]["source_event_id"],"385770")
+
+
 class SportyTraderFAQCrossProofTest(unittest.TestCase):
     TIP="https://www.sportytrader.com/en/betting-tips/brighton-brentford-385770/"
     EVENT="https://www.sportytrader.com/en/results-live/brighton-brentford-8558904/"
