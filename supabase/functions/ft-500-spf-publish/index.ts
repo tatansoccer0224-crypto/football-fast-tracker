@@ -3,7 +3,7 @@ import { createRemoteJWKSet, jwtVerify } from "npm:jose@6.1.0";
 
 // No user-visible credential, no CORS, no public publisher.
 const jwks = createRemoteJWKSet(new URL("https://token.actions.githubusercontent.com/.well-known/jwks"));
-const workflow = "sargesticky-code/football-fast-tracker/.github/workflows/ft-500-spf.yml@refs/heads/main";
+const workflow = "tatansoccer0224-crypto/football-fast-tracker/.github/workflows/ft-500-spf.yml@refs/heads/main";
 const error = (status: number, message: string) =>
   Response.json({ error: message }, { status, headers: { "Cache-Control": "no-store" } });
 
@@ -23,7 +23,7 @@ Deno.serve(async (req: Request) => {
   } catch {
     return error(401, "UNVERIFIED_GITHUB_IDENTITY");
   }
-  if (claims.repository !== "sargesticky-code/football-fast-tracker"
+  if (claims.repository !== "tatansoccer0224-crypto/football-fast-tracker"
     || claims.ref !== "refs/heads/main"
     || claims.workflow_ref !== workflow
     || !["schedule", "workflow_dispatch", "push"].includes(String(claims.event_name))

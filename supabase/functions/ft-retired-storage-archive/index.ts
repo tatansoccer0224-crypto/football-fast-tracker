@@ -3,7 +3,7 @@ import { createRemoteJWKSet, jwtVerify } from "npm:jose@6.1.0";
 
 // Exact GitHub Actions OIDC main-branch workflow; no public or user JWT bypass.
 const jwks = createRemoteJWKSet(new URL("https://token.actions.githubusercontent.com/.well-known/jwks"));
-const WORKFLOW = "sargesticky-code/football-fast-tracker/.github/workflows/retired-storage-archive.yml@refs/heads/main";
+const WORKFLOW = "tatansoccer0224-crypto/football-fast-tracker/.github/workflows/retired-storage-archive.yml@refs/heads/main";
 const MAX_BATCH_ROWS = 200;
 const MAX_FILE_BYTES = 4_500_000;
 const BUCKET = "fast-tracker-ingest";
@@ -73,7 +73,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
       clockTolerance: "30s",
     });
     const c = verified.payload;
-    if (c.repository !== "sargesticky-code/football-fast-tracker"
+    if (c.repository !== "tatansoccer0224-crypto/football-fast-tracker"
       || c.ref !== "refs/heads/main" || c.workflow_ref !== WORKFLOW
       || !["push", "workflow_dispatch", "schedule"].includes(String(c.event_name))
       || !/^[0-9]{6,20}$/.test(String(c.run_id))) {

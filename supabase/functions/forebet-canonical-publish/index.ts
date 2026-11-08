@@ -4,7 +4,7 @@ import { createRemoteJWKSet, jwtVerify } from "npm:jose@6.1.0";
 const jwks = createRemoteJWKSet(new URL("https://token.actions.githubusercontent.com/.well-known/jwks"));
 const issuer = "https://token.actions.githubusercontent.com";
 const audience = "fast-tracker-supabase";
-const workflowRef = "sargesticky-code/football-fast-tracker/.github/workflows/supabase_private_ingest.yml@refs/heads/main";
+const workflowRef = "tatansoccer0224-crypto/football-fast-tracker/.github/workflows/supabase_private_ingest.yml@refs/heads/main";
 
 Deno.serve(async (request: Request): Promise<Response> => {
   const response = (code: number, body: Record<string, unknown>) =>
@@ -22,10 +22,10 @@ Deno.serve(async (request: Request): Promise<Response> => {
   } catch {
     return response(401, { error: "INVALID_GITHUB_IDENTITY" });
   }
-  const trustedRepo = claims.repository === "sargesticky-code/football-fast-tracker";
+  const trustedRepo = claims.repository === "tatansoccer0224-crypto/football-fast-tracker";
   const main = claims.ref === "refs/heads/main" && claims.workflow_ref === workflowRef;
   const preview = claims.ref === "refs/heads/feat/forebet-v2-20261014" &&
-    claims.workflow_ref === "sargesticky-code/football-fast-tracker/.github/workflows/supabase_private_ingest.yml@refs/heads/feat/forebet-v2-20261014";
+    claims.workflow_ref === "tatansoccer0224-crypto/football-fast-tracker/.github/workflows/supabase_private_ingest.yml@refs/heads/feat/forebet-v2-20261014";
   if (!trustedRepo || !(main || (request.method === "GET" && preview)) ||
       !["schedule", "workflow_run", "workflow_dispatch", "push"].includes(String(claims.event_name)) ||
       !/^\d{6,20}$/.test(String(claims.run_id ?? ""))) {
