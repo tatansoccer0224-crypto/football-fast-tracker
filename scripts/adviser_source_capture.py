@@ -86,7 +86,20 @@ def betclan_utc_listing_evidence(html):
         oriented = (home_node.get_text(" ", strip=True), away_node.get_text(" ", strip=True))
         for script in cell.find_all("script", type="application/ld+json"):
             try:
-                data = json.loads(script.string or "")
+                raw = script.string or ""
+                try:
+                    data = json.loads(raw)
+                except json.JSONDecodeError as error:
+                    # Observed 2026-11-08: BetClan listing emits exactly ONE
+                    # extra closing brace AFTER a complete SportsEvent object.
+                    # Recover ONLY that narrow syntax error, never arbitrary
+                    # truncated/broken JSON or unexpected trailing content.
+                    trimmed = raw.rstrip()
+                    if (error.msg != "Extra data"
+                        or error.pos != len(trimmed) - 1
+                        or not trimmed.endswith("}")):
+                        raise
+                    data = json.loads(trimmed[:-1])
             except (ValueError, TypeError):
                 continue
             for event in data if isinstance(data, list) else [data]:
