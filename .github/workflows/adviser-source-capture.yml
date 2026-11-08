@@ -69,16 +69,16 @@ jobs:
           from pathlib import Path
           src=Path('scripts/adviser_source_capture.py').read_text()
           ast.parse(src)
-          assert 'choices=range(9)' in src
-          assert 'related_evidence_limit <= 8' in src
+          assert 'choices=range(17)' in src
+          assert 'related_evidence_limit <= 16' in src
           print('RELATED_EVIDENCE_CLI_0_TO_8_OK')
           PY
       - name: Collect today's and tomorrow's source records
         # Opt-in main push [capture-once] only; ordinary pushes stay test-only.
         if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.replay_run_id == '') || (github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[capture-once]'))
         # Bounded daily capture: at most 120 tips/provider (240 records total)
-        # and no more than 8 independently linked SportyTrader event checks.
-        run: python scripts/adviser_source_capture.py --output /tmp/adviser-source.json --limit 120 --evidence-dir /tmp/adviser-evidence --related-evidence-limit 8
+        # and no more than 16 independently linked SportyTrader event checks.
+        run: python scripts/adviser_source_capture.py --output /tmp/adviser-source.json --limit 120 --evidence-dir /tmp/adviser-evidence --related-evidence-limit 16
       - name: Publish authenticated observations on main
         if: github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && contains(github.event.head_commit.message, '[capture-once]')))
         env:
