@@ -395,7 +395,7 @@ class SportyTraderFAQCrossProofTest(unittest.TestCase):
         self.assertEqual(proof["source_clock_basis"],"FAQ_GMT_AND_LINKED_SPORTSEVENT")
         self.assertIsNone(proof["canonical_event_id"],
                           "Source time alone never proves Flashscore fixture identity")
-        self.assertIsNone(proof.get("identity") if proof.get("identity") != "UNRESOLVED" else None)
+        self.assertEqual(proof.get("identity"),"UNRESOLVED")
 
     def test_other_event_timestamp_or_team_does_not_pass_utc_crosscheck(self):
         tip=parse_sportytrader(self.tip_html(),self.TIP)
