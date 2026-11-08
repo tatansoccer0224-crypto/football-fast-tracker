@@ -235,8 +235,7 @@ class BetClanUTCListingCrosscheckTest(unittest.TestCase):
         self.assertEqual(row["source_clock_disagreement_minutes"],60)
 
     def test_more_than_one_trailing_brace_is_not_silently_recovered(self):
-        for bad in ('}}</script>', '}</script>injected',
-                    '"other":true}</script>'):
+        for bad in ('}}</script>', '}garbage</script>', '}null</script>'):
             data=self.listing().replace("</script>",bad)
             self.assertNotIn(self.URL,betclan_utc_listing_evidence(data))
 
