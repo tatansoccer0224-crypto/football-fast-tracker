@@ -7,6 +7,7 @@ from scripts.adviser_source_capture import parse_betclan, parse_sportytrader, ca
 from scripts.adviser_source_capture import betclan_utc_listing_evidence
 from scripts.adviser_source_capture import collect
 from scripts.adviser_source_capture import enrich_sportytrader_event
+from scripts.adviser_source_capture import sportytrader_faq_utc
 from scripts.adviser_source_capture import replay_saved_evidence
 
 
@@ -359,3 +360,82 @@ class BetClanRegressionTest(unittest.TestCase):
         for triplet in [{'home':-.1,'draw':.5,'away':.6},{'home':float('nan'),'draw':.5,'away':.5},
                         {'home':True,'draw':0,'away':0},{'home':1.1,'draw':0,'away':-.1}]:
             self.assertIsNone(valid_triplet(triplet))
+
+
+class SportyTraderFAQCrossProofTest(unittest.TestCase):
+    TIP="https://www.sportytrader.com/en/betting-tips/brighton-brentford-385770/"
+    EVENT="https://www.sportytrader.com/en/results-live/brighton-brentford-8558904/"
+
+    def tip_html(self, answer="The Premier League match between Brighton and Brentford "
+                           "is due to take place on Sunday November 8 and begin at 14:00 UK time.",
+                 question="When is Brighton v Brentford being played?"):
+        import json
+        faq={"@type":"FAQPage","mainEntity":[{"@type":"Question","name":question,
+             "acceptedAnswer":{"@type":"Answer","text":answer}}]}
+        return ('<h1>Brighton vs Brentford Prediction & Betting Tips - Premier League</h1>'
+                '<p>08/11/2026 09:00</p><p>Prediction : BTTS</p>'
+                '<a href="/en/results-live/brighton-brentford-8558904/">Match</a>'
+                '<script type="application/ld+json">'+json.dumps([faq])+'</script>')
+
+    def result_html(self, stamp="2026-11-08T08:00:00-06:00",
+                    home="Brighton",away="Brentford",league="Premier League"):
+        import json
+        event={"@type":"SportsEvent","url":self.EVENT,"startDate":stamp,
+               "homeTeam":{"name":home},"awayTeam":{"name":away},
+               "organizer":{"name":league}}
+        return '<script type="application/ld+json">'+json.dumps([event])+'</script>'
+
+    def test_uk_faq_clock_corroborates_different_page_local_wall_time(self):
+        tip=parse_sportytrader(self.tip_html(),self.TIP)
+        self.assertEqual(tip["source_wall_time"],"09:00")
+        self.assertEqual(tip["source_faq_kickoff_utc"],"2026-11-08T14:00:00+00:00")
+        proof=enrich_sportytrader_event(tip,self.result_html(),self.EVENT)
+        self.assertTrue(proof["kickoff_timezone_verified"])
+        self.assertEqual(proof["source_kickoff"],"2026-11-08T08:00:00-06:00")
+        self.assertEqual(proof["source_clock_basis"],"FAQ_GMT_AND_LINKED_SPORTSEVENT")
+        self.assertIsNone(proof["canonical_event_id"],
+                          "Source time alone never proves Flashscore fixture identity")
+        self.assertEqual(proof.get("identity"),"UNRESOLVED")
+
+    def test_other_event_timestamp_or_team_does_not_pass_utc_crosscheck(self):
+        tip=parse_sportytrader(self.tip_html(),self.TIP)
+        for html in [
+            self.result_html(stamp="2026-11-08T09:00:00-06:00"),
+            self.result_html(home="Brentford",away="Brighton"),
+            self.result_html(league="Other League"),
+            self.result_html(stamp="2026-11-08T08:00:00"),
+        ]:
+            self.assertFalse(enrich_sportytrader_event(
+                tip,html,self.EVENT)["kickoff_timezone_verified"])
+
+    def test_wrong_date_team_or_unzoned_faq_stays_unknown(self):
+        cases=[
+            {"answer":"The match is on November 9 at 14:00 UK time."},
+            {"answer":"The match is on November 8 at 14:00, UK venue."},
+            {"answer":"The match is on November 8 at 14:00 PST."},
+            {"question":"When is Chelsea v Brentford being played?"},
+        ]
+        for change in cases:
+            row=parse_sportytrader(self.tip_html(**change),self.TIP)
+            self.assertIsNone(row["source_faq_kickoff_utc"])
+            self.assertFalse(enrich_sportytrader_event(
+                row,self.result_html(),self.EVENT)["kickoff_timezone_verified"])
+
+    def test_uk_autumn_dst_fold_is_ambiguous_and_not_auto_confirmed(self):
+        import json
+        from bs4 import BeautifulSoup
+        faq={"@type":"FAQPage","mainEntity":[{"@type":"Question",
+             "name":"When is Brighton v Brentford being played?",
+             "acceptedAnswer":{"text":"The match is on October 25 at 01:30 UK time."}}]}
+        soup=BeautifulSoup('<script type="application/ld+json">'+json.dumps(faq)+'</script>',
+                           'html.parser')
+        self.assertIsNone(sportytrader_faq_utc(
+            soup,"Brighton","Brentford","2026-10-25"))
+
+    def test_existing_matching_wall_time_remains_valid_without_faq(self):
+        tip=parse_sportytrader(self.tip_html(answer="No confirmed kickoff time."),
+                              self.TIP)
+        tip["source_wall_time"]="08:00"
+        proof=enrich_sportytrader_event(tip,self.result_html(),self.EVENT)
+        self.assertTrue(proof["kickoff_timezone_verified"])
+        self.assertEqual(proof["source_clock_basis"],"WALL_CLOCK_AND_LINKED_SPORTSEVENT")
