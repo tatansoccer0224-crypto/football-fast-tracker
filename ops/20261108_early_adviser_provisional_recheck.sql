@@ -1,10 +1,9 @@
 -- 2026-11-08 verified source-delivery timing hotfix.
--- Existing BetClan/SportyTrader GitHub daily capture starts at 05:30 HKT,
--- and its last successful run completed ~02:34 UTC in production.
--- The provisional source-to-Flashscore recheck previously only ran 07:40 UTC,
--- leaving a multi-hour lag even after an otherwise successful capture.
+-- Existing BetClan/SportyTrader GitHub schedule starts at 05:30 UTC
+-- (13:30 HKT); the recent 02:31 UTC capture was an exceptional rerun.
+-- The provisional source-to-Flashscore recheck previously ran at 07:40 UTC.
 --
--- Add 03:40 UTC to the existing 07:40 UTC daily run.
+-- Add 06:40 UTC between scheduled capture and existing 07:40 UTC run.
 -- Keep the existing function and source-time/league/uniqueness guards;
 -- do not change any identity classification or fabricate missing kickoffs.
 -- No table migrations or historical-row deletion.
@@ -20,14 +19,14 @@ BEGIN
   IF trim(existing_command) <> 'SELECT private.ft_recheck_adviser_provisional_05();' THEN
     RAISE EXCEPTION 'Unexpected adviser recheck command; no mutation';
   END IF;
-  IF existing_schedule='40 3,7 * * *' THEN
+  IF existing_schedule='40 6,7 * * *' THEN
     RAISE NOTICE 'Extra early recheck already active';
     RETURN;
   END IF;
   IF existing_schedule<>'40 7 * * *' THEN
     RAISE EXCEPTION 'Unexpected adviser provisional schedule: %',existing_schedule;
   END IF;
-  PERFORM cron.alter_job(job_id:=existing_job_id,schedule:='40 3,7 * * *');
+  PERFORM cron.alter_job(job_id:=existing_job_id,schedule:='40 6,7 * * *');
 END
 $ft_add_early_adviser_recheck$;
 
