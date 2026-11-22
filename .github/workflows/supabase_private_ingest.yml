@@ -24,7 +24,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   source-and-match:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 18
     services:
       browser-helper:
