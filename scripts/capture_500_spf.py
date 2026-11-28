@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 import re
 import sys
+import time
+import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
@@ -196,13 +198,43 @@ def resolve_canonical(source,fixtures,now):
                             provider="CHINA_500_SPF",captured_at=now.isoformat()))
     return [row for row in matches if row["match_id"] not in collision]
 
+def _retryable_source_error(error):
+    """Only short-lived network failures; never retry missing/blocked pages."""
+    if isinstance(error, urllib.error.HTTPError):
+        return 500 <= error.code <= 599
+    if isinstance(error, (TimeoutError, ConnectionResetError, ConnectionAbortedError)):
+        return True
+    if isinstance(error, urllib.error.URLError):
+        reason = str(error.reason).casefold()
+        # Specifically observed 2026-11-28: SSL handshake operation timed out.
+        return any(pattern in reason for pattern in (
+            "timed out", "timeout", "connection reset", "connection aborted",
+            "remote end closed connection", "temporary failure in name resolution"
+        ))
+    return False
+
+
 def get(url,max_bytes):
     r=urllib.request.Request(url,headers={"User-Agent":"Mozilla/5.0 (FastTracker/500-SPF-Reader)","Accept":"application/json,text/html,application/xml","Cache-Control":"no-cache"})
-    with urllib.request.urlopen(r,timeout=15) as response:
-        body=response.read(max_bytes+1)
-    if len(body)>max_bytes:
-        raise ValueError("provider payload exceeded size limit")
-    return body
+    # Max three requests for a given fixed official endpoint. Zero extra
+    # requests on normal success; 1s/3s backoff on transient timeouts/5xx.
+    # Payload size, XML validity, fixture provenance and safe identity gates
+    # remain unchanged. Never reuse stale odds from a previous capture.
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(r,timeout=15) as response:
+                body=response.read(max_bytes+1)
+            if len(body)>max_bytes:
+                raise ValueError("provider payload exceeded size limit")
+            return body
+        except (urllib.error.URLError, TimeoutError, ConnectionResetError,
+                ConnectionAbortedError) as error:
+            if attempt == 2 or not _retryable_source_error(error):
+                raise
+            print("CHINA_500_SPF_TRANSIENT_RETRY",type(error).__name__,
+                  "attempt",attempt+2,"of",3,file=sys.stderr)
+            time.sleep((1,3)[attempt])
+    raise RuntimeError("unreachable transient retry guard")
 
 def verified_fixtures(payload, now):
     """Strict Flashscore-source fixture adapter. No team/league aliases inferred."""
