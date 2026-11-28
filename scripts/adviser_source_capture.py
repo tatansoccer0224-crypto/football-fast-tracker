@@ -11,7 +11,7 @@ import hashlib
 import math
 import re
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
@@ -419,7 +419,13 @@ def enrich_sportytrader_event(row, html, url):
             faq_utc = row.get('source_faq_kickoff_utc')
             wall_agrees = at.strftime('%H:%M') == row['source_wall_time']
             faq_agrees = isinstance(faq_utc, str) and at.astimezone(timezone.utc).isoformat() == faq_utc
-            if (event.get('url') != url or at.strftime('%Y-%m-%d') != row['source_date']
+            # A timezone-aware linked SportsEvent can legitimately show the
+            # PREVIOUS local calendar day relative to the source FAQ's GMT
+            # kickoff. Require exact absolute FAQ UTC before allowing that
+            # cross-midnight date difference. Without FAQ, preserve the
+            # legacy strict local-date + local-wall-clock equality.
+            if (event.get('url') != url
+                or (at.strftime('%Y-%m-%d') != row['source_date'] and not faq_agrees)
                 or (not wall_agrees and not faq_agrees)
                 or (faq_utc is not None and not faq_agrees)):
                 continue
@@ -503,10 +509,10 @@ def replay_saved_evidence(report, evidence_dir):
     return {**report, 'records': records}
 
 
-# Related SportsEvent page fetches are limited to 16 daily. Sort *after*
-# collecting all allowed tip details, so alphabetical URL order cannot spend
-# the evidence budget on arbitrary early URLs. Priority only controls WHICH
-# source proof to read; it never certifies identity or guesses timezones.
+# Linked SportyTrader result-page checks remain capped at 16 per capture.
+# Select which links merit independent evidence: a dated, explicitly UTC/GMT/UK
+# same-tip FAQ is the highest-value candidate for a second-source cross-check.
+# The FAQ is NEVER proof of kickoff by itself, nor a canonical Flashscore ID.
 MAJOR_LEAGUES = (
     "premier league", "champions league", "laliga", "serie a", "bundesliga",
     "ligue 1", "championship", "europa league", "eredivisie",
@@ -516,13 +522,20 @@ MAJOR_LEAGUES = (
 def sportytrader_related_priority(row, capture_date):
     league = str(row.get("source_competition") or "").strip().casefold()
     source_date = str(row.get("source_date") or "")
-    # Prefer today/tomorrow, then established league importance, then genuine
-    # complete source model probability, finally deterministic provider ID.
-    date_rank = 0 if source_date == capture_date else 1 if source_date > capture_date else 2
+    tomorrow = (datetime.strptime(capture_date, "%Y-%m-%d") +
+                timedelta(days=1)).strftime("%Y-%m-%d")
+    # Only prioritize a source-clock claim that survived the existing
+    # dated/teams/timezone FAQ parser, and is for today or tomorrow.
+    faq_utc = row.get("source_faq_kickoff_utc")
+    faq_rank = 0 if (isinstance(faq_utc, str)
+                     and re.fullmatch(r"20\d{2}-[01]\d-[0-3]\dT(?:[01]\d|2[0-3]):[0-5]\d:00\+00:00", faq_utc)
+                     and source_date in (capture_date, tomorrow)) else 1
+    date_rank = 0 if source_date == capture_date else 1 if source_date == tomorrow else 2
     league_rank = next((i for i, name in enumerate(MAJOR_LEAGUES)
                         if league == name or league.endswith(" - " + name)), len(MAJOR_LEAGUES))
     model_rank = 0 if valid_triplet(row.get("hda")) else 1
-    return (date_rank, league_rank, model_rank, str(row.get("source_event_id") or ""))
+    return (faq_rank, date_rank, league_rank, model_rank,
+            str(row.get("source_event_id") or ""))
 
 
 def collect(limit=100, pause=0.4, session=None, source=None, evidence_dir=None, related_evidence_limit=0):
@@ -624,6 +637,8 @@ def collect(limit=100, pause=0.4, session=None, source=None, evidence_dir=None, 
             if related_attempts >= related_evidence_limit:
                 break
             related_attempts += 1
+            if row.get("source_faq_kickoff_utc"):
+                sporty_diag["faq_crosscheck_attempted"] = sporty_diag.get("faq_crosscheck_attempted", 0) + 1
             try:
                 related_html = fetch(session, related)
                 related_hash = hashlib.sha256(related_html.encode("utf-8")).hexdigest()
@@ -637,6 +652,8 @@ def collect(limit=100, pause=0.4, session=None, source=None, evidence_dir=None, 
                 row.update(related_source_url=related, related_content_hash=related_hash)
                 if row.get("kickoff_timezone_verified") is True:
                     sporty_diag["related_verified_kickoff"] = sporty_diag.get("related_verified_kickoff", 0) + 1
+                    if row.get("source_clock_basis") == "FAQ_GMT_AND_LINKED_SPORTSEVENT":
+                        sporty_diag["faq_crosscheck_verified"] = sporty_diag.get("faq_crosscheck_verified", 0) + 1
                 else:
                     sporty_diag["related_unverified"] = sporty_diag.get("related_unverified", 0) + 1
             except (requests.RequestException, RuntimeError, OSError):

@@ -8,6 +8,7 @@ from scripts.adviser_source_capture import betclan_utc_listing_evidence
 from scripts.adviser_source_capture import collect
 from scripts.adviser_source_capture import enrich_sportytrader_event
 from scripts.adviser_source_capture import sportytrader_faq_utc
+from scripts.adviser_source_capture import sportytrader_related_priority
 from scripts.adviser_source_capture import replay_saved_evidence
 
 
@@ -542,3 +543,139 @@ class SportyTraderFAQCrossProofTest(unittest.TestCase):
         proof=enrich_sportytrader_event(tip,self.result_html(),self.EVENT)
         self.assertTrue(proof["kickoff_timezone_verified"])
         self.assertEqual(proof["source_clock_basis"],"WALL_CLOCK_AND_LINKED_SPORTSEVENT")
+
+
+class SportyTraderFAQPriorityRegressionTest(unittest.TestCase):
+    """The daily 16-link budget must check genuine dated GMT FAQ evidence first."""
+
+    def test_explicit_uk_gmt_time_for_tomorrow_outweighs_today_without_proof(self):
+        today = "2026-11-28"
+        today_without_proof = {
+            "source_event_id": "390111", "source_date": today,
+            "source_competition": "Premier League", "source_faq_kickoff_utc": None,
+            "hda": {"home": 0.50, "draw": 0.25, "away": 0.25},
+        }
+        tomorrow_with_utc = {
+            "source_event_id": "390436", "source_date": "2026-11-29",
+            "source_competition": "Premier League",
+            "source_faq_kickoff_utc": "2026-11-29T14:05:00+00:00",
+            "hda": None,
+        }
+        self.assertLess(
+            sportytrader_related_priority(tomorrow_with_utc, today),
+            sportytrader_related_priority(today_without_proof, today))
+        for unverified in ("2026-11-29T14:05:00", "2026-11-29T14:05:00-06:00", None):
+            candidate = {**tomorrow_with_utc, "source_faq_kickoff_utc": unverified}
+            self.assertGreater(
+                sportytrader_related_priority(candidate, today),
+                sportytrader_related_priority(tomorrow_with_utc, today))
+        # A page claiming a date outside the today/tomorrow discovery window
+        # must not jump ahead solely by having an FAQ string.
+        old = {**tomorrow_with_utc, "source_date": "2026-11-27"}
+        self.assertGreater(
+            sportytrader_related_priority(old, today),
+            sportytrader_related_priority(tomorrow_with_utc, today))
+
+    def test_one_verified_faq_is_selected_with_same_single_link_request_budget(self):
+        import json
+        from datetime import date, timedelta, datetime, timezone
+        from zoneinfo import ZoneInfo
+        today = datetime.now(timezone.utc).date()
+        tomorrow = today + timedelta(days=1)
+        date_str = tomorrow.strftime("%d/%m/%Y")
+        local = datetime(tomorrow.year, tomorrow.month, tomorrow.day,
+                         14, 5, tzinfo=ZoneInfo("Europe/London"))
+        actual_utc = local.astimezone(timezone.utc)
+        faq = {
+            "@type": "FAQPage",
+            "mainEntity": [{
+                "@type": "Question",
+                "name": "When is Crystal Palace vs Hull being played?",
+                "acceptedAnswer": {
+                    "@type": "Answer",
+                    "text": f"The match between Crystal Palace and Hull is on "
+                            f"{tomorrow.strftime('%B')} {tomorrow.day} at 14:05 UK time.",
+                },
+            }],
+        }
+        early_tip = "https://www.sportytrader.com/en/betting-tips/arsenal-city-390111/"
+        faq_tip = "https://www.sportytrader.com/en/betting-tips/crystal-palace-hull-390436/"
+        early_link = "https://www.sportytrader.com/en/results-live/arsenal-city-800001/"
+        faq_link = "https://www.sportytrader.com/en/results-live/crystal-palace-hull-8558925/"
+        listing = (
+            '<a href="/en/betting-tips/arsenal-city-390111/">today</a>'
+            '<a href="/en/betting-tips/crystal-palace-hull-390436/">tomorrow</a>'
+        )
+        early_page = (f"<h1>Arsenal vs City Prediction & Betting Tips - Premier League</h1>"
+                      f"<p>{today.strftime('%d/%m/%Y')} 09:00</p><p>Prediction : BTTS</p>"
+                      '<a href="/en/results-live/arsenal-city-800001/">Results</a>')
+        faq_page = (f"<h1>Crystal Palace vs Hull Prediction & Betting Tips - Premier League</h1>"
+                    f"<p>{date_str} 08:05</p><p>Prediction : BTTS</p>"
+                    '<a href="/en/results-live/crystal-palace-hull-8558925/">Results</a>'
+                    '<script type="application/ld+json">' + json.dumps(faq) + '</script>')
+        from datetime import timedelta as duration
+        local_event = actual_utc.astimezone(timezone(duration(hours=-6)))
+        event = {
+            "@type": "SportsEvent", "url": faq_link,
+            "startDate": local_event.isoformat(),
+            "homeTeam": {"name": "Crystal Palace"},
+            "awayTeam": {"name": "Hull"},
+            "organizer": {"name": "Premier League"},
+        }
+        linked_html = '<script type="application/ld+json">' + json.dumps(event) + '</script>'
+        urls = []
+        def fake_fetch(session, url):
+            urls.append(url)
+            return {
+                early_tip: early_page, faq_tip: faq_page, faq_link: linked_html,
+            }.get(url, listing)
+        with tempfile.TemporaryDirectory() as folder, patch(
+            "scripts.adviser_source_capture.fetch", side_effect=fake_fetch
+        ):
+            report = collect(source="SPORTYTRADER", limit=2, pause=0,
+                             evidence_dir=folder, related_evidence_limit=1)
+        self.assertEqual(len(urls), 5, "2 listings + 2 tips + 1 bounded result page")
+        self.assertIn(faq_link, urls)
+        self.assertNotIn(early_link, urls)
+        stats = report["providers"]["SPORTYTRADER"]
+        self.assertEqual(stats["related_attempted"], 1)
+        self.assertEqual(stats["faq_crosscheck_attempted"], 1)
+        self.assertEqual(stats["faq_crosscheck_verified"], 1)
+        rows = {row["source_event_id"]: row for row in report["records"]}
+        self.assertTrue(rows["390436"]["kickoff_timezone_verified"])
+        self.assertEqual(datetime.fromisoformat(rows["390436"]["source_kickoff"]).astimezone(timezone.utc), actual_utc)
+        self.assertIsNone(rows["390436"]["canonical_event_id"],
+                          "Source proof does not promote to Flashscore automatically")
+        self.assertFalse(rows["390111"]["kickoff_timezone_verified"])
+
+    def test_cross_midnight_link_is_accepted_only_with_exact_dated_faq_utc(self):
+        import json
+        url = "https://www.sportytrader.com/en/results-live/crystal-palace-hull-8558925/"
+        row = {
+            "source": "SPORTYTRADER", "home": "Crystal Palace", "away": "Hull",
+            "source_date": "2026-11-29", "source_wall_time": "17:30",
+            "source_faq_kickoff_utc": "2026-11-29T00:30:00+00:00",
+            "source_competition": "Premier League", "identity": "UNRESOLVED",
+            "canonical_event_id": None, "kickoff_timezone_verified": False,
+        }
+        event = {
+            "@type": "SportsEvent", "url": url,
+            "startDate": "2026-11-28T18:30:00-06:00",
+            "homeTeam": {"name": "Crystal Palace"},
+            "awayTeam": {"name": "Hull"},
+            "organizer": {"name": "Premier League"},
+        }
+        def html(e):
+            return '<script type="application/ld+json">' + json.dumps(e) + '</script>'
+        accepted = enrich_sportytrader_event(row, html(event), url)
+        self.assertTrue(accepted["kickoff_timezone_verified"])
+        self.assertEqual(accepted["source_clock_basis"], "FAQ_GMT_AND_LINKED_SPORTSEVENT")
+        self.assertIsNone(accepted["canonical_event_id"])
+        for invalid_row, invalid_event in [
+            ({**row, "source_faq_kickoff_utc": None}, event),
+            ({**row, "source_faq_kickoff_utc": "2026-11-29T01:30:00+00:00"}, event),
+            (row, {**event, "organizer": {"name": "LaLiga"}}),
+            (row, {**event, "homeTeam": {"name": "Hull"}}),
+        ]:
+            self.assertFalse(enrich_sportytrader_event(
+                invalid_row, html(invalid_event), url)["kickoff_timezone_verified"])
