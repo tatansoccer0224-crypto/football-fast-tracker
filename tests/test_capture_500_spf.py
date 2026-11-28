@@ -1,9 +1,12 @@
 import sys
+import io
+import urllib.error
 import unittest
+from unittest.mock import patch
 from datetime import datetime,timezone
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/"scripts"))
-from capture_500_spf import read_official,resolve_canonical
+from capture_500_spf import read_official,resolve_canonical,get,_retryable_source_error
 
 NOW=datetime(2026,10,10,12,25,tzinfo=timezone.utc)
 FIXTURES=[
@@ -70,4 +73,52 @@ class ProviderTests(unittest.TestCase):
   row=dict(source_league="西班牙甲级联赛",source_home="巴列卡诺",source_away="假名字",kickoff="2026-10-10T12:00:00Z")
   f=dict(id="FS:BAD",league="LaLigaSPAIN: Standings",home="Rayo Vallecano",away="Ath. Bilbao",kickoff="2026-10-10T12:00:00Z")
   self.assertEqual(resolve_canonical([row],[f],NOW),[])
+class TransportRetryTests(unittest.TestCase):
+ def test_initial_success_makes_exactly_one_official_request(self):
+  with patch("capture_500_spf.urllib.request.urlopen",return_value=io.BytesIO(b"safe")) as urlopen, patch("capture_500_spf.time.sleep") as sleep:
+   self.assertEqual(get("https://trade.500.com/example.xml",100),b"safe")
+  self.assertEqual(urlopen.call_count,1)
+  sleep.assert_not_called()
+
+ def test_actual_tls_handshake_timeout_recovers_with_one_retry(self):
+  side_effect=[urllib.error.URLError("_ssl.c:1063: The handshake operation timed out"),io.BytesIO(b"fresh")]
+  with patch("capture_500_spf.urllib.request.urlopen",side_effect=side_effect) as urlopen, patch("capture_500_spf.time.sleep") as sleep:
+   self.assertEqual(get("https://trade.500.com/example.xml",100),b"fresh")
+  self.assertEqual(urlopen.call_count,2)
+  sleep.assert_called_once_with(1)
+
+ def test_http_503_recovers_but_403_404_and_bad_cert_do_not_retry(self):
+  for code in (500,503,504):
+   unavailable=urllib.error.HTTPError("https://trade.500.com/",code,"temporary",{},None)
+   with self.subTest(code=code), patch("capture_500_spf.urllib.request.urlopen",side_effect=[unavailable,io.BytesIO(b"xml")]) as urlopen, patch("capture_500_spf.time.sleep") as sleep:
+    self.assertEqual(get("https://trade.500.com/example.xml",100),b"xml")
+    self.assertEqual(urlopen.call_count,2)
+    sleep.assert_called_once_with(1)
+  for code in (403,404,429):
+   blocked=urllib.error.HTTPError("https://trade.500.com/",code,"do not retry",{},None)
+   with self.subTest(code=code), patch("capture_500_spf.urllib.request.urlopen",side_effect=blocked) as urlopen, patch("capture_500_spf.time.sleep") as sleep:
+    with self.assertRaises(urllib.error.HTTPError):
+     get("https://trade.500.com/example.xml",100)
+    self.assertEqual(urlopen.call_count,1)
+    sleep.assert_not_called()
+  with patch("capture_500_spf.urllib.request.urlopen",side_effect=urllib.error.URLError("CERTIFICATE_VERIFY_FAILED")) as urlopen,patch("capture_500_spf.time.sleep") as sleep:
+   with self.assertRaises(urllib.error.URLError):
+    get("https://trade.500.com/example.xml",100)
+   self.assertEqual(urlopen.call_count,1)
+   sleep.assert_not_called()
+
+ def test_repeated_timeouts_end_with_error_and_never_use_stale_payload(self):
+  with patch("capture_500_spf.urllib.request.urlopen",side_effect=urllib.error.URLError("handshake operation timed out")) as urlopen, patch("capture_500_spf.time.sleep") as sleep:
+   with self.assertRaises(urllib.error.URLError):
+    get("https://trade.500.com/example.xml",100)
+   self.assertEqual(urlopen.call_count,3)
+   self.assertEqual([c.args[0] for c in sleep.call_args_list],[1,3])
+
+ def test_oversized_response_is_rejected_without_retry(self):
+  with patch("capture_500_spf.urllib.request.urlopen",return_value=io.BytesIO(b"oversize")) as urlopen,patch("capture_500_spf.time.sleep") as sleep:
+   with self.assertRaisesRegex(ValueError,"size limit"):
+    get("https://trade.500.com/example.xml",4)
+   self.assertEqual(urlopen.call_count,1)
+   sleep.assert_not_called()
+
 if __name__=="__main__":unittest.main()
