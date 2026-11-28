@@ -608,10 +608,10 @@ class SportyTraderFAQPriorityRegressionTest(unittest.TestCase):
         )
         early_page = (f"<h1>Arsenal vs City Prediction & Betting Tips - Premier League</h1>"
                       f"<p>{today.strftime('%d/%m/%Y')} 09:00</p><p>Prediction : BTTS</p>"
-                      f'<a href="{early_link}">Results</a>')
+                      '<a href="/en/results-live/arsenal-city-800001/">Results</a>')
         faq_page = (f"<h1>Crystal Palace vs Hull Prediction & Betting Tips - Premier League</h1>"
                     f"<p>{date_str} 08:05</p><p>Prediction : BTTS</p>"
-                    f'<a href="{faq_link}">Results</a>'
+                    '<a href="/en/results-live/crystal-palace-hull-8558925/">Results</a>'
                     '<script type="application/ld+json">' + json.dumps(faq) + '</script>')
         from datetime import timedelta as duration
         local_event = actual_utc.astimezone(timezone(duration(hours=-6)))
