@@ -2,6 +2,11 @@ name: FT500 Official China SPF Verified Capture
 on:
   schedule:
     - cron: '13,43 * * * *'
+  pull_request:
+    paths:
+      - '.github/workflows/ft-500-spf.yml'
+      - 'scripts/capture_500_spf.py'
+      - 'tests/test_capture_500_spf.py'
   workflow_dispatch:
   push:
     branches: [main]
@@ -16,7 +21,18 @@ concurrency:
   group: ft500-official-spf
   cancel-in-progress: false
 jobs:
+  # Pull requests can never request an OIDC token, fetch provider pages or
+  # publish to Supabase; run the same offline source safety tests only.
+  canonical-safety-pr:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify canonical identity and bounded network retry safety
+        run: python -m unittest discover -s tests -p test_capture_500_spf.py -v
   capture-and-publish:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
